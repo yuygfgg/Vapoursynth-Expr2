@@ -1,5 +1,5 @@
-#include <vapoursynth/VapourSynth.h>
-#include <vapoursynth/VSHelper.h>
+#include </usr/local/include/vapoursynth/VapourSynth.h>
+#include </usr/local/include/vapoursynth/VSHelper.h>
 #include <stack>
 #include <map>
 #include <set>
@@ -14,6 +14,8 @@
 
 const int MAX_STACK_SIZE = 4096; // 4096 should be long enough
 
+enum class OpResultType { Scalar, Vector };
+
 // 异常类
 class ExprError : public std::exception {
 private:
@@ -25,43 +27,97 @@ public:
 
 // 操作符描述
 struct OperatorDescriptor {
-    int minArgs;  // 最小参数数量
-    int maxArgs;  // 最大参数数量 
-    int deltaStack;  // 对栈大小的影响
-    std::function<float(const std::vector<float>&)> func;  // 实际运算函数
+    int minArgs;
+    int maxArgs;
+    int deltaStack;
+    OpResultType resultType;
+    std::variant<
+        std::function<float(const std::vector<float>&)>,
+        std::function<std::vector<float>(const std::vector<float>&)>
+    > func;
     
+    // 修改工厂函数
     static OperatorDescriptor createUnary(std::function<float(float)> f) {
-        return {1, 1, 0, [f](const std::vector<float>& args) { return f(args[0]); }};
+        return {
+            1, 1, 0, 
+            OpResultType::Scalar,
+            [f](const std::vector<float>& args) { return f(args[0]); }
+        };
     }
     
     static OperatorDescriptor createBinary(std::function<float(float,float)> f) {
-        return {2, 2, -1, [f](const std::vector<float>& args) { return f(args[0], args[1]); }};
+        return {
+            2, 2, -1, 
+            OpResultType::Scalar,
+            [f](const std::vector<float>& args) { return f(args[0], args[1]); }
+        };
     }
     
     static OperatorDescriptor createTernary(std::function<float(float,float,float)> f) {
-        return {3, 3, -2, [f](const std::vector<float>& args) { return f(args[0], args[1], args[2]); }};
+        return {
+            3, 3, -2, 
+            OpResultType::Scalar,
+            [f](const std::vector<float>& args) { return f(args[0], args[1], args[2]); }
+        };
     }
     
-    static OperatorDescriptor createStackOp(int minA, int maxA, int delta) {
-        return {minA, maxA, delta, nullptr};
+    static OperatorDescriptor createStackOp(int minA, int maxA, int delta, 
+        std::function<std::vector<float>(const std::vector<float>&)> f) 
+    {
+        return {minA, maxA, delta, OpResultType::Vector, f};
     }
+};
+
+struct OperatorPattern {
+    std::string prefix;
+    std::function<bool(const std::string&)> matcher;
+    std::function<OperatorDescriptor(const std::string&)> generator;
 };
 
 // 操作符注册表
 class OperatorRegistry {
 private:
-    std::map<std::string, OperatorDescriptor> operators;
-    
-public:
-    void registerOperator(const std::string& name, const OperatorDescriptor& desc) {
-        operators[name] = desc;
+    mutable std::map<std::string, OperatorDescriptor> operators;
+    std::vector<OperatorPattern> patterns;
+
+    // 辅助函数：创建简单的字符串匹配模式
+    static OperatorPattern createSimplePattern(
+        const std::string& token, 
+        const OperatorDescriptor& desc) 
+    {
+        return {
+            token,
+            [token](const std::string& t) { return t == token; },
+            [desc](const std::string&) { return desc; }
+        };
     }
 
-    const OperatorDescriptor* getOperator(const std::string& name) const {
-        auto it = operators.find(name);
-        return it != operators.end() ? &it->second : nullptr;
+public:
+    void registerPattern(const OperatorPattern& pattern) {
+        patterns.push_back(pattern);
     }
-    
+
+    void registerOperator(const std::string& token, const OperatorDescriptor& desc) {
+        registerPattern(createSimplePattern(token, desc));
+    }
+
+    const OperatorDescriptor* getOperator(const std::string& token) const {
+        // 先查找固定操作符
+        auto it = operators.find(token);
+        if (it != operators.end()) {
+            return &it->second;
+        }
+
+        // 再匹配模式
+        for (const auto& pattern : patterns) {
+            if (token.starts_with(pattern.prefix) && pattern.matcher(token)) {
+                operators[token] = pattern.generator(token);  // 缓存生成的操作符
+                return &operators[token];
+            }
+        }
+        return nullptr;
+    }
+
     void initDefaultOperators() {
         // 基本算术运算符
         registerOperator("+", OperatorDescriptor::createBinary([](float a, float b) { return a + b; }));
@@ -124,19 +180,57 @@ public:
             return c > 0 ? t : f; 
         }));
 
-        // 栈操作
-        registerOperator("dup", OperatorDescriptor::createStackOp(1, 1, 1));
-        registerOperator("swap", OperatorDescriptor::createStackOp(2, 2, 0));
-        
-        // 动态生成 dupN 和 swapN
-        for (int i = 0; i <= 25; ++i) {
-            registerOperator("dup" + std::to_string(i), 
-                OperatorDescriptor::createStackOp(i + 1, i + 1, 1));
-            if (i > 0) {
-                registerOperator("swap" + std::to_string(i),
-                    OperatorDescriptor::createStackOp(i + 1, i + 1, 0));
+        // 特殊模式：dupN
+        registerPattern({
+            "dup",
+            [](const std::string& token) {
+                if (token == "dup") return true;
+                if (!token.starts_with("dup")) return false;
+                try {
+                    int n = std::stoi(token.substr(3));
+                    return n >= 0 && n <= 25;
+                } catch (...) {
+                    return false;
+                }
+            },
+            [](const std::string& token) {
+                int n = token == "dup" ? 0 : std::stoi(token.substr(3));
+                return OperatorDescriptor::createStackOp(
+                    n + 1, n + 1, 1,
+                    [n](const std::vector<float>& args) {
+                        std::vector<float> results = args;
+                        results.push_back(args[args.size() - n - 1]);
+                        return results;
+                    }
+                );
             }
-        }
+        });
+
+        // 特殊模式：swapN
+        registerPattern({
+            "swap",
+            [](const std::string& token) {
+                if (token == "swap") return true;
+                if (!token.starts_with("swap")) return false;
+                try {
+                    int n = std::stoi(token.substr(4));
+                    return n >= 1 && n <= 25;
+                } catch (...) {
+                    return false;
+                }
+            },
+            [](const std::string& token) {
+                int n = token == "swap" ? 1 : std::stoi(token.substr(4));
+                return OperatorDescriptor::createStackOp(
+                    n + 1, n + 1, 0,
+                    [n](const std::vector<float>& args) {
+                        std::vector<float> results = args;
+                        std::swap(results[0], results[n]);
+                        return results;
+                    }
+                );
+            }
+        });
     }
 };
 
@@ -144,107 +238,34 @@ public:
 class ExprStack {
 private:
     std::stack<float> stack;
-    std::vector<float> temp_storage;  // 用于临时存储操作数
-
-    void getOne(float& value) {
-        if (stack.empty()) {
-            throw ExprError("Stack underflow in basic operation");
-        }
-        value = stack.top();
+    
+    float pop() {
+        if (stack.empty()) throw ExprError("Stack underflow");
+        float val = stack.top();
         stack.pop();
+        return val;
     }
 
 public:
-    template<typename... Args>
-    void getOperands(Args&... args) {
-        if (stack.size() < sizeof...(Args)) {
-            throw ExprError("Stack underflow");
-        }
-        (getOne(args), ...);
-    }
-
-    void pushResult(float result) {
-        stack.push(result);
-    }
-
-    float peekAt(size_t n) const {
-        if (stack.size() <= n) {
-            throw ExprError("Stack underflow in peek operation");
-        }
-        
-        auto temp = stack;
-        for (size_t i = 0; i < n; ++i) {
-            temp.pop();
-        }
-        return temp.top();
-    }
-
-    void swapN(size_t n) {
-        if (n == 0) {
-            throw ExprError("swap index must be greater than 0");
-        }
-        if (stack.size() <= n) {
-            throw ExprError("Stack underflow in swap" + std::to_string(n) + 
-                            ": need " + std::to_string(n + 1) + " values");
-        }
-
-        temp_storage.clear();
-        for (size_t i = 0; i <= n; ++i) {
-            temp_storage.push_back(stack.top());
-            stack.pop();
-        }
-        
-        stack.push(temp_storage[0]);
-        for (size_t i = temp_storage.size() - 1; i > 1; --i) {
-            stack.push(temp_storage[i]);
-        }
-        stack.push(temp_storage[1]);
-    }
-
-    void dupN(size_t n) {
-        if (stack.size() <= n) {
-            throw ExprError("Stack underflow in dup" + std::to_string(n) + 
-                            ": need " + std::to_string(n + 1) + " values");
-        }
-        
-        temp_storage.clear();
-        for (size_t i = 0; i < n + 1; ++i) {
-            temp_storage.push_back(stack.top());
-            stack.pop();
-        }
-        
-        for (auto it = temp_storage.rbegin(); it != temp_storage.rend(); ++it) {
-            stack.push(*it);
-        }
-        
-        stack.push(temp_storage[temp_storage.size() - 1]);
-    }
-
-    std::vector<float> getTopN(size_t n) {
+    void push(float value) { stack.push(value); }
+    
+    // 收集操作数
+    std::vector<float> collectArgs(size_t n) {
         if (stack.size() < n) {
-            throw ExprError("Stack underflow in getTopN operation");
+            throw ExprError("Stack underflow: need " + std::to_string(n) + " values");
         }
-        
-        std::vector<float> result(n);
+        std::vector<float> args(n);
         for (size_t i = 0; i < n; ++i) {
-            result[n - 1 - i] = stack.top();
-            stack.pop();
+            args[n - 1 - i] = pop();
         }
-        return result;
+        return args;
     }
 
-    void push(float value) {
-        stack.push(value);
-    }
-
-    void clear() {
-        while (!stack.empty()) {
-            stack.pop();
+    // 应用结果
+    void applyResults(const std::vector<float>& results) {
+        for (float value : results) {
+            push(value);
         }
-    }
-
-    size_t size() const {
-        return stack.size();
     }
 
     float getResult() const {
@@ -255,6 +276,9 @@ public:
         return stack.top();
     }
 
+    void clear() { while (!stack.empty()) stack.pop(); }
+    size_t size() const { return stack.size(); }
+    
     std::string debugStack() const {
         std::string result = "Stack (bottom to top): ";
         std::vector<float> values;
@@ -405,26 +429,19 @@ public:
 
         try {
             stack.clear();
-            std::vector<std::string> tokens = tokenize(expr);
+            auto tokens = tokenize(expr);
             
             for (size_t i = 0; i < tokens.size(); ++i) {
                 const auto& token = tokens[i];
                 try {
                     if (auto op = registry.getOperator(token)) {
-                        if (op->func) {
-                            // 收集参数并执行函数
-                            auto args = stack.getTopN(op->minArgs);
-                            stack.push(op->func(args));
+                        auto args = stack.collectArgs(op->minArgs);
+                        if (op->resultType == OpResultType::Scalar) {
+                            auto f = std::get<std::function<float(const std::vector<float>&)>>(op->func);
+                            stack.push(f(args));
                         } else {
-                            // 特殊栈操作
-                            if (token.substr(0, 3) == "dup") {
-                                int n = token == "dup" ? 0 : std::stoi(token.substr(3));
-                                stack.dupN(n);
-                            }
-                            else if (token.substr(0, 4) == "swap") {
-                                int n = token == "swap" ? 1 : std::stoi(token.substr(4));
-                                stack.swapN(n);
-                            }
+                            auto f = std::get<std::function<std::vector<float>(const std::vector<float>&)>>(op->func);
+                            stack.applyResults(f(args));
                         }
                     }
                     else if (token == "x") {
@@ -460,7 +477,6 @@ public:
             throw ExprError("Expression evaluation error: " + std::string(e.what()));
         }
     }
-
     void registerOperator(const std::string& name, const OperatorDescriptor& desc) {
         registry.registerOperator(name, desc);
     }
@@ -669,9 +685,8 @@ static void VS_CC exprCreate(const VSMap* in, VSMap* out, void* userData, VSCore
             d->expressions.push_back(d->expressions.back());
         }
 
-        // 创建过滤器
         vsapi->createFilter(in, out, "Expr", exprInit, exprGetFrame, exprFree, 
-            fmParallel, 0, d.release(), core);
+            fmParallelRequests, 0, d.release(), core);
     }
     catch (const std::exception& e) {
         vsapi->setError(out, ("Expr: " + std::string(e.what())).c_str());
