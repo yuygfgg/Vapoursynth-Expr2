@@ -73,76 +73,87 @@ struct OperatorPattern {
     std::function<OperatorDescriptor(const std::string&)> generator;
 };
 
+#define DEFINE_UNARY_OP(name, impl) \
+    {name, {1, 1, 0, OpResultType::Scalar, \
+        [](const std::vector<float>& args) -> float { return impl(args[0]); }}}
+
+#define DEFINE_BINARY_OP(name, impl) \
+    {name, {2, 2, -1, OpResultType::Scalar, \
+        [](const std::vector<float>& args) -> float { return impl(args[0], args[1]); }}}
+
+#define DEFINE_TERNARY_OP(name, impl) \
+    {name, {3, 3, -2, OpResultType::Scalar, \
+        [](const std::vector<float>& args) -> float { return impl(args[0], args[1], args[2]); }}}
+
 class OperatorRegistry {
 private:
+    struct DynamicPattern {
+        std::string prefix;
+        std::function<bool(const std::string&)> matcher;
+        std::function<OperatorDescriptor(const std::string&)> generator;
+    };
+
     static const std::map<std::string, OperatorDescriptor>& getStaticOperators() {
         static const std::map<std::string, OperatorDescriptor> staticOperators = {
             // 基本算术运算符
-            {"+", OperatorDescriptor::createBinary([](float a, float b) { return a + b; })},
-            {"-", OperatorDescriptor::createBinary([](float a, float b) { return a - b; })},
-            {"*", OperatorDescriptor::createBinary([](float a, float b) { return a * b; })},
-            {"/", OperatorDescriptor::createBinary([](float a, float b) { 
+            DEFINE_BINARY_OP("+", [](float a, float b) { return a + b; }),
+            DEFINE_BINARY_OP("-", [](float a, float b) { return a - b; }),
+            DEFINE_BINARY_OP("*", [](float a, float b) { return a * b; }),
+            DEFINE_BINARY_OP("/", [](float a, float b) { 
                 if (b == 0) throw ExprError("Division by zero");
                 return a / b; 
-            })},
+            }),
 
             // 数学函数
-            {"exp", OperatorDescriptor::createUnary([](float a) {
+            DEFINE_UNARY_OP("exp", [](float a) {
                 if (a > 88) throw ExprError("exp overflow");
                 return std::exp(a);
-            })},
-            {"log", OperatorDescriptor::createUnary([](float a) {
+            }),
+            DEFINE_UNARY_OP("log", [](float a) {
                 if (a <= 0) throw ExprError("log domain error");
                 return std::log(a);
-            })},
-            {"sqrt", OperatorDescriptor::createUnary([](float a) {
+            }),
+            DEFINE_UNARY_OP("sqrt", [](float a) {
                 if (a < 0) throw ExprError("sqrt domain error");
                 return std::sqrt(a);
-            })},
-            {"sin", OperatorDescriptor::createUnary([](float a) { return std::sin(a); })},
-            {"cos", OperatorDescriptor::createUnary([](float a) { return std::cos(a); })},
-            {"abs", OperatorDescriptor::createUnary([](float a) { return std::abs(a); })},
-            {"not", OperatorDescriptor::createUnary([](float a) { return a > 0 ? 0.0f : 1.0f; })},
+            }),
+            DEFINE_UNARY_OP("sin", std::sin),
+            DEFINE_UNARY_OP("cos", std::cos),
+            DEFINE_UNARY_OP("abs", std::abs),
+            DEFINE_UNARY_OP("not", [](float a) { return a > 0 ? 0.0f : 1.0f; }),
 
             // 比较运算符
-            {">", OperatorDescriptor::createBinary([](float a, float b) { return a > b ? 1.0f : 0.0f; })},
-            {"<", OperatorDescriptor::createBinary([](float a, float b) { return a < b ? 1.0f : 0.0f; })},
-            {"=", OperatorDescriptor::createBinary([](float a, float b) { return a == b ? 1.0f : 0.0f; })},
-            {">=", OperatorDescriptor::createBinary([](float a, float b) { return a >= b ? 1.0f : 0.0f; })},
-            {"<=", OperatorDescriptor::createBinary([](float a, float b) { return a <= b ? 1.0f : 0.0f; })},
+            DEFINE_BINARY_OP(">", [](float a, float b) { return a > b ? 1.0f : 0.0f; }),
+            DEFINE_BINARY_OP("<", [](float a, float b) { return a < b ? 1.0f : 0.0f; }),
+            DEFINE_BINARY_OP("=", [](float a, float b) { return a == b ? 1.0f : 0.0f; }),
+            DEFINE_BINARY_OP(">=", [](float a, float b) { return a >= b ? 1.0f : 0.0f; }),
+            DEFINE_BINARY_OP("<=", [](float a, float b) { return a <= b ? 1.0f : 0.0f; }),
 
             // 逻辑运算符
-            {"and", OperatorDescriptor::createBinary([](float a, float b) { 
-                return (a > 0 && b > 0) ? 1.0f : 0.0f; 
-            })},
-            {"or", OperatorDescriptor::createBinary([](float a, float b) { 
-                return (a > 0 || b > 0) ? 1.0f : 0.0f; 
-            })},
-            {"xor", OperatorDescriptor::createBinary([](float a, float b) { 
-                return ((a > 0) != (b > 0)) ? 1.0f : 0.0f; 
-            })},
+            DEFINE_BINARY_OP("and", [](float a, float b) { return (a > 0 && b > 0) ? 1.0f : 0.0f; }),
+            DEFINE_BINARY_OP("or", [](float a, float b) { return (a > 0 || b > 0) ? 1.0f : 0.0f; }),
+            DEFINE_BINARY_OP("xor", [](float a, float b) { return ((a > 0) != (b > 0)) ? 1.0f : 0.0f; }),
 
             // 其他数学运算符
-            {"max", OperatorDescriptor::createBinary([](float a, float b) { return std::max(a, b); })},
-            {"min", OperatorDescriptor::createBinary([](float a, float b) { return std::min(a, b); })},
-            {"pow", OperatorDescriptor::createBinary([](float a, float b) { 
+            DEFINE_BINARY_OP("max", std::max),
+            DEFINE_BINARY_OP("min", std::min),
+            DEFINE_BINARY_OP("pow", [](float a, float b) { 
                 if (a < 0) throw ExprError("pow domain error");
                 float result = std::pow(a, b);
                 if (result > 3e38f || result < 1e-38f) 
                     throw ExprError("pow range error");
                 return result;
-            })},
+            }),
 
             // 三元运算符
-            {"?", OperatorDescriptor::createTernary([](float c, float t, float f) { 
-                return c > 0 ? t : f; 
-            })}
+            DEFINE_TERNARY_OP("?", [](float c, float t, float f) { return c > 0 ? t : f; })
         };
         return staticOperators;
     }
 
-    static const std::vector<OperatorPattern>& getStaticPatterns() {
-        static const std::vector<OperatorPattern> staticPatterns = {
+    // 动态操作符模式处理保持不变
+    static const std::vector<DynamicPattern>& getDynamicPatterns() {
+        static const std::vector<DynamicPattern> patterns = {
             // dup pattern
             {
                 "dup",
@@ -158,14 +169,15 @@ private:
                 },
                 [](const std::string& token) {
                     int n = token == "dup" ? 0 : std::stoi(token.substr(3));
-                    return OperatorDescriptor::createStackOp(
+                    return OperatorDescriptor{
                         n + 1, n + 1, 1,
-                        [n](const std::vector<float>& args) {
+                        OpResultType::Vector,
+                        [n](const std::vector<float>& args) -> std::vector<float> {
                             std::vector<float> results = args;
                             results.push_back(args[args.size() - n - 1]);
                             return results;
                         }
-                    );
+                    };
                 }
             },
             // swap pattern
@@ -183,39 +195,38 @@ private:
                 },
                 [](const std::string& token) {
                     int n = token == "swap" ? 1 : std::stoi(token.substr(4));
-                    return OperatorDescriptor::createStackOp(
+                    return OperatorDescriptor{
                         n + 1, n + 1, 0,
-                        [n](const std::vector<float>& args) {
+                        OpResultType::Vector,
+                        [n](const std::vector<float>& args) -> std::vector<float> {
                             std::vector<float> results = args;
                             std::swap(results[0], results[n]);
                             return results;
                         }
-                    );
+                    };
                 }
             }
         };
-        return staticPatterns;
+        return patterns;
     }
 
     mutable std::map<std::string, OperatorDescriptor> dynamicOperators;
 
 public:
     const OperatorDescriptor* getOperator(const std::string& token) const {
-        // 先查找静态操作符
+        // 实现保持不变
         const auto& staticOps = getStaticOperators();
         auto staticIt = staticOps.find(token);
         if (staticIt != staticOps.end()) {
             return &staticIt->second;
         }
 
-        // 查找动态缓存
         auto dynamicIt = dynamicOperators.find(token);
         if (dynamicIt != dynamicOperators.end()) {
             return &dynamicIt->second;
         }
 
-        // 匹配模式
-        const auto& patterns = getStaticPatterns();
+        const auto& patterns = getDynamicPatterns();
         for (const auto& pattern : patterns) {
             if (token.starts_with(pattern.prefix) && pattern.matcher(token)) {
                 auto& inserted = dynamicOperators[token] = pattern.generator(token);
@@ -224,7 +235,6 @@ public:
         }
         return nullptr;
     }
-
 };
 
 // 栈操作类
