@@ -60,83 +60,52 @@ struct OperatorPattern {
     {name, {3, 3, -2, OpResultType::Scalar, \
         [](const std::vector<float>& args) -> float { return impl(args[0], args[1], args[2]); }}}
 
-#define DEFINE_DUP_OP(n) \
-    {"dup" #n, {(n + 1), (n + 1), 1, OpResultType::Vector, \
-        [](const std::vector<float>& args) -> std::vector<float> { \
+#define DEFINE_SWAP_OP(start) \
+    {"swap" #start, {(start + 1), (start + 1), 0, OpResultType::Vector, \
+        [start](const std::vector<float>& args) -> std::vector<float> { \
             std::vector<float> results = args; \
-            results.push_back(args[args.size() - n - 1]); \
+            std::swap(results[0], results[start]); \
             return results; \
         }}}
 
-#define DEFINE_SWAP_OP(n) \
-    {"swap" #n, {(n + 1), (n + 1), 0, OpResultType::Vector, \
-        [](const std::vector<float>& args) -> std::vector<float> { \
+#define DEFINE_DUP_OP(start) \
+    {"dup" #start, {(start + 1), (start + 1), 1, OpResultType::Vector, \
+        [start](const std::vector<float>& args) -> std::vector<float> { \
             std::vector<float> results = args; \
-            std::swap(results[0], results[n]); \
+            results.push_back(args[args.size() - start - 1]); \
             return results; \
         }}}
 
-// 基础模板：用于递归终止，当 start == end 时停止递归
+// 通用基础模板：用于递归终止，当 start == end 时停止递归
+template<int start, int end, void(*InsertFunc)(int, std::map<std::string, OperatorDescriptor>&)>
+struct OpsRange {
+    static void apply(std::map<std::string, OperatorDescriptor>& opMap) {
+        InsertFunc(start, opMap);  // 使用传入的 InsertFunc 函数进行插入
+        OpsRange<start + 1, end, InsertFunc>::apply(opMap);  // 递归调用，展开下一个索引
+    }
+};
+
+// 通用特化模板：用于递归终止
+template<int end, void(*InsertFunc)(int, std::map<std::string, OperatorDescriptor>&)>
+struct OpsRange<end, end, InsertFunc> {
+    static void apply(std::map<std::string, OperatorDescriptor>& opMap) {
+        InsertFunc(end, opMap);  // 最后一次展开并插入
+    }
+};
+
+// Swap 操作符插入函数
+void insertSwapOp(int start, std::map<std::string, OperatorDescriptor>& opMap) {
+    opMap.insert(DEFINE_SWAP_OP(start));  // 插入 swap 操作符
+}
+
+// Dup 操作符插入函数
+void insertDupOp(int start, std::map<std::string, OperatorDescriptor>& opMap) {
+    opMap.insert(DEFINE_DUP_OP(start));  // 插入 dup 操作符
+}
+
+// 使用 OpsRange 模板来定义 SwapOpsRange 和 DupOpsRange
 template<int start, int end>
-struct SwapOpsRange {
-    static void apply(std::map<std::string, OperatorDescriptor>& opMap) {
-        opMap.insert(DEFINE_SWAP_OP(start));  // 执行当前索引的宏插入
-        SwapOpsRange<start + 1, end>::apply(opMap);  // 递归调用，展开下一个索引
-    }
-};
-
-// 特化模板：用于递归终止
-template<int end>
-struct SwapOpsRange<end, end> {
-    static void apply(std::map<std::string, OperatorDescriptor>& opMap) {
-        opMap.insert(DEFINE_SWAP_OP(end));  // 最后一次展开并插入
-    }
-};
-
-// 基础模板：用于递归终止，当 start == end 时停止递归
-template<int start, int end>
-struct DupOpsRange {
-    static void apply(std::map<std::string, OperatorDescriptor>& opMap) {
-        opMap.insert(DEFINE_DUP_OP(start));  // 执行当前索引的宏插入
-        DupOpsRange<start + 1, end>::apply(opMap);  // 递归调用，展开下一个索引
-    }
-};
-
-// 特化模板：用于递归终止
-template<int end>
-struct DupOpsRange<end, end> {
-    static void apply(std::map<std::string, OperatorDescriptor>& opMap) {
-        opMap.insert(DEFINE_DUP_OP(end));  // 最后一次展开并插入
-    }
-};
-
-// 允许操作符表为 const 的版本
-template<int start, int end>
-struct SwapOpsRangeConst {
-    static void apply(std::map<std::string, OperatorDescriptor>& opMap) {
-        opMap.insert(DEFINE_SWAP_OP(start));  // 执行当前索引的宏插入
-        SwapOpsRangeConst<start + 1, end>::apply(opMap);  // 递归调用，展开下一个索引
-    }
-};
-
-template<int end>
-struct SwapOpsRangeConst<end, end> {
-    static void apply(std::map<std::string, OperatorDescriptor>& opMap) {
-        opMap.insert(DEFINE_SWAP_OP(end));  // 最后一次展开并插入
-    }
-};
+using SwapOpsRange = OpsRange<start, end, insertSwapOp>;
 
 template<int start, int end>
-struct DupOpsRangeConst {
-    static void apply(std::map<std::string, OperatorDescriptor>& opMap) {
-        opMap.insert(DEFINE_DUP_OP(start));  // 执行当前索引的宏插入
-        DupOpsRangeConst<start + 1, end>::apply(opMap);  // 递归调用，展开下一个索引
-    }
-};
-
-template<int end>
-struct DupOpsRangeConst<end, end> {
-    static void apply(std::map<std::string, OperatorDescriptor>& opMap) {
-        opMap.insert(DEFINE_DUP_OP(end));  // 最后一次展开并插入
-    }
-};
+using DupOpsRange = OpsRange<start, end, insertDupOp>;
