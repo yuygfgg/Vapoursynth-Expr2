@@ -315,7 +315,7 @@ private:
         return token.length() == 1 && token[0] >= 'a' && token[0] <= 'w';
     }
 
-    void validateStackEffect(const std::vector<std::string>& tokens) {
+    void validateStackEffect(const std::vector<std::string>& tokens) const {
         int stackSize = 0;
         int maxStackSize = 0;
         
@@ -353,7 +353,7 @@ private:
 public:
     ExpressionValidator(const OperatorRegistry& reg) : registry(reg) {}
 
-    void validate(const std::string& expr, int numClips) {
+    void validate(const std::string& expr, int numClips) const {
         if (expr.empty()) return;  // 空表达式是合法的
 
         std::vector<std::string> tokens;
@@ -398,10 +398,9 @@ public:
 class ExprCalculator {
 private:
     OperatorRegistry registry;
-    ExprStack stack;
     ExpressionValidator validator;
 
-    std::vector<std::string> tokenize(const std::string& expr) {
+    std::vector<std::string> tokenize(const std::string& expr) const {
         std::vector<std::string> tokens;
         std::string token;
         std::istringstream tokenStream(expr);
@@ -413,75 +412,134 @@ private:
         return tokens;
     }
 
+    // 单个像素的计算，完全独立，无共享状态
+    float evaluatePixel(const std::vector<std::string>& tokens, const std::vector<float>& values) const {
+        std::vector<float> stack;  // 局部栈
+        stack.reserve(32);  // 预分配空间避免频繁重新分配
+
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            const auto& token = tokens[i];
+            try {
+                if (auto op = registry.getOperator(token)) {
+                    if (stack.size() < op->minArgs) {
+                        throw ExprError("Stack underflow at token '" + token + "'");
+                    }
+
+                    std::vector<float> args(stack.end() - op->minArgs, stack.end());
+                    stack.erase(stack.end() - op->minArgs, stack.end());
+
+                    if (op->resultType == OpResultType::Scalar) {
+                        auto f = std::get<std::function<float(const std::vector<float>&)>>(op->func);
+                        stack.push_back(f(args));
+                    } else {
+                        auto f = std::get<std::function<std::vector<float>(const std::vector<float>&)>>(op->func);
+                        auto results = f(args);
+                        stack.insert(stack.end(), results.begin(), results.end());
+                    }
+                }
+                else if (token == "x") {
+                    stack.push_back(values.size() > 0 ? values[0] : 0.0f);
+                }
+                else if (token == "y") {
+                    stack.push_back(values.size() > 1 ? values[1] : 0.0f);
+                }
+                else if (token == "z") {
+                    stack.push_back(values.size() > 2 ? values[2] : 0.0f);
+                }
+                else if (token.length() == 1 && token[0] >= 'a' && token[0] <= 'w') {
+                    int index = token[0] - 'a' + 3;
+                    stack.push_back(values.size() > index ? values[index] : 0.0f);
+                }
+                else {
+                    stack.push_back(std::stof(token));
+                }
+            }
+            catch (const std::exception& e) {
+                throw ExprError("Error at token '" + token + "' (position " + 
+                            std::to_string(i) + "): " + e.what());
+            }
+        }
+
+        if (stack.size() != 1) {
+            throw ExprError("Invalid expression evaluation: stack size = " + 
+                          std::to_string(stack.size()));
+        }
+        return stack.back();
+    }
+
 public:
     ExprCalculator() : validator(registry) {
         registry.initDefaultOperators();
     }
 
-    void validate(const std::string& expr, int numClips) {
+    void validate(const std::string& expr, int numClips) const {
         validator.validate(expr, numClips);
     }
 
-    float evaluate(const std::string& expr, const std::vector<float>& values) {
-        if (expr.empty()) {
-            return values.empty() ? 0.0f : values[0];
-        }
+    void processPlane(const std::string& expr,
+                    const std::vector<const uint8_t*>& srcps,
+                    const std::vector<int>& src_strides,
+                    uint8_t* dstp,
+                    int dst_stride,
+                    int width,
+                    int height,
+                    int plane,
+                    const VSFormat* fi) const 
+    {
+        bool isFloat = fi->sampleType == stFloat;
+        int bits = fi->bitsPerSample;
+        int maxValue = isFloat ? 1 : ((1 << bits) - 1);
+        bool isChroma = (plane == 1 || plane == 2) && 
+                        (fi->colorFamily == cmYUV || fi->colorFamily == cmYCoCg);
 
-        try {
-            stack.clear();
-            auto tokens = tokenize(expr);
-            
-            for (size_t i = 0; i < tokens.size(); ++i) {
-                const auto& token = tokens[i];
-                try {
-                    if (auto op = registry.getOperator(token)) {
-                        auto args = stack.collectArgs(op->minArgs);
-                        if (op->resultType == OpResultType::Scalar) {
-                            auto f = std::get<std::function<float(const std::vector<float>&)>>(op->func);
-                            stack.push(f(args));
+        auto tokens = tokenize(expr);
+        std::vector<float> pixel_values(srcps.size());
+
+        // 使用OpenMP进行并行处理
+        #pragma omp parallel for collapse(2)
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                // 收集所有输入clip在当前位置的像素值
+                for (size_t i = 0; i < srcps.size(); i++) {
+                    float value;
+                    if (isFloat) {
+                        value = reinterpret_cast<const float*>(srcps[i] + y * src_strides[i])[x];
+                        if (isChroma) {
+                            value += 0.5f;
+                        }
+                    } else {
+                        if (bits > 8) {
+                            value = static_cast<float>(reinterpret_cast<const uint16_t*>(
+                                srcps[i] + y * src_strides[i])[x]);
                         } else {
-                            auto f = std::get<std::function<std::vector<float>(const std::vector<float>&)>>(op->func);
-                            stack.applyResults(f(args));
+                            value = static_cast<float>(srcps[i][y * src_strides[i] + x]);
                         }
                     }
-                    else if (token == "x") {
-                        stack.push(values.size() > 0 ? values[0] : 0.0f);
-                    }
-                    else if (token == "y") {
-                        stack.push(values.size() > 1 ? values[1] : 0.0f);
-                    }
-                    else if (token == "z") {
-                        stack.push(values.size() > 2 ? values[2] : 0.0f);
-                    }
-                    else if (token.length() == 1 && token[0] >= 'a' && token[0] <= 'w') {
-                        int index = token[0] - 'a' + 3;
-                        stack.push(values.size() > index ? values[index] : 0.0f);
-                    }
-                    else {
-                        stack.push(std::stof(token));
-                    }
+                    pixel_values[i] = value;
                 }
-                catch (const std::exception& e) {
-                    throw ExprError("Error at token '" + token + "' (position " + 
-                                std::to_string(i) + "): " + e.what() + 
-                                "\n" + stack.debugStack());
+
+                // 计算表达式
+                float result = evaluatePixel(tokens, pixel_values);
+
+                // 写入结果
+                if (isFloat) {
+                    if (isChroma) {
+                        result -= 0.5f;
+                    }
+                    reinterpret_cast<float*>(dstp + y * dst_stride)[x] = result;
+                } else {
+                    result = std::clamp(result, 0.0f, static_cast<float>(maxValue));
+                    if (bits > 8) {
+                        reinterpret_cast<uint16_t*>(dstp + y * dst_stride)[x] =
+                            static_cast<uint16_t>(result);
+                    } else {
+                        dstp[y * dst_stride + x] = static_cast<uint8_t>(result);
+                    }
                 }
             }
-
-            return stack.getResult();
         }
-        catch (const ExprError& e) {
-            throw;
-        }
-        catch (const std::exception& e) {
-            throw ExprError("Expression evaluation error: " + std::string(e.what()));
-        }
-    }
-    void registerOperator(const std::string& name, const OperatorDescriptor& desc) {
-        registry.registerOperator(name, desc);
     }
 };
-
 // VapourSynth 插件结构
 struct ExprData {
     VSNodeRef* nodes[26];  // 支持x,y,z + a-w共26个输入clip
@@ -538,18 +596,12 @@ static const VSFrameRef* VS_CC exprGetFrame(int n, int activationReason, void** 
             vsapi->getFrameHeight(first_frame, 0),
             first_frame, core);
 
-        // 处理每个平面
         const VSFormat* fi = d->vi->format;
         int planes = fi->numPlanes;
-        int bits = fi->bitsPerSample;
-        bool isFloat = fi->sampleType == stFloat;
-        int maxValue = isFloat ? 1 : ((1 << bits) - 1);
-
-        std::vector<float> pixel_values(d->numNodes);
 
         for (int plane = 0; plane < planes; plane++) {
             if (d->expressions[plane].empty()) {
-                // 空表达式时直接复制第一个clip的对应平面
+                // 空表达式时直接复制
                 const uint8_t* srcp = vsapi->getReadPtr(first_frame, plane);
                 int src_stride = vsapi->getStride(first_frame, plane);
                 uint8_t* dstp = vsapi->getWritePtr(dst, plane);
@@ -561,61 +613,29 @@ static const VSFrameRef* VS_CC exprGetFrame(int n, int activationReason, void** 
                 continue;
             }
 
-            int height = vsapi->getFrameHeight(first_frame, plane);
-            int width = vsapi->getFrameWidth(first_frame, plane);
-            uint8_t* dstp = vsapi->getWritePtr(dst, plane);
-            int dst_stride = vsapi->getStride(dst, plane);
-
-            // 处理每个像素
-            for (int y = 0; y < height; y++) {
-                for (int x = 0; x < width; x++) {
-                    // 收集所有输入clip在当前位置的像素值
-                    for (int i = 0; i < d->numNodes; i++) {
-                        const uint8_t* srcp = vsapi->getReadPtr(src_frames[i], plane);
-                        int src_stride = vsapi->getStride(src_frames[i], plane);
-
-                        float value;
-                        if (isFloat) {
-                            value = reinterpret_cast<const float*>(srcp + y * src_stride)[x];
-                            if ((plane == 1 || plane == 2) &&
-                                (fi->colorFamily == cmYUV || fi->colorFamily == cmYCoCg)) {
-                                value += 0.5f;
-                            }
-                        } else {
-                            if (bits > 8) {
-                                value = static_cast<float>(reinterpret_cast<const uint16_t*>(
-                                    srcp + y * src_stride)[x]);
-                            } else {
-                                value = static_cast<float>(srcp[y * src_stride + x]);
-                            }
-                        }
-                        pixel_values[i] = value;
-                    }
-
-                    // 计算表达式
-                    float result = d->calculator.evaluate(d->expressions[plane], pixel_values);
-
-                    // 写入结果
-                    if (isFloat) {
-                        if ((plane == 1 || plane == 2) &&
-                            (fi->colorFamily == cmYUV || fi->colorFamily == cmYCoCg)) {
-                            result -= 0.5f;
-                        }
-                        reinterpret_cast<float*>(dstp + y * dst_stride)[x] = result;
-                    } else {
-                        result = std::clamp(result, 0.0f, static_cast<float>(maxValue));
-                        if (bits > 8) {
-                            reinterpret_cast<uint16_t*>(dstp + y * dst_stride)[x] =
-                                static_cast<uint16_t>(result);
-                        } else {
-                            dstp[y * dst_stride + x] = static_cast<uint8_t>(result);
-                        }
-                    }
-                }
+            // 收集所有源平面的指针和步长
+            std::vector<const uint8_t*> srcps;
+            std::vector<int> src_strides;
+            for (const auto& frame : src_frames) {
+                srcps.push_back(vsapi->getReadPtr(frame, plane));
+                src_strides.push_back(vsapi->getStride(frame, plane));
             }
+
+            // 处理整个平面
+            d->calculator.processPlane(
+                d->expressions[plane],
+                srcps,
+                src_strides,
+                vsapi->getWritePtr(dst, plane),
+                vsapi->getStride(dst, plane),
+                vsapi->getFrameWidth(first_frame, plane),
+                vsapi->getFrameHeight(first_frame, plane),
+                plane,
+                fi
+            );
         }
 
-        // 处理完毕后，释放输入帧
+        // 释放源帧
         for (const auto& frame : src_frames) {
             vsapi->freeFrame(frame);
         }
@@ -623,13 +643,9 @@ static const VSFrameRef* VS_CC exprGetFrame(int n, int activationReason, void** 
         return dst;
     }
     catch (const std::exception& e) {
-        if (dst) {
-            vsapi->freeFrame(dst);
-        }
+        if (dst) vsapi->freeFrame(dst);
         for (const auto& frame : src_frames) {
-            if (frame) {
-                vsapi->freeFrame(frame);
-            }
+            if (frame) vsapi->freeFrame(frame);
         }
         vsapi->setFilterError(("Expr: " + std::string(e.what())).c_str(), frameCtx);
         return nullptr;
@@ -686,7 +702,7 @@ static void VS_CC exprCreate(const VSMap* in, VSMap* out, void* userData, VSCore
         }
 
         vsapi->createFilter(in, out, "Expr", exprInit, exprGetFrame, exprFree, 
-            fmParallelRequests, 0, d.release(), core);
+            fmParallel, 0, d.release(), core);
     }
     catch (const std::exception& e) {
         vsapi->setError(out, ("Expr: " + std::string(e.what())).c_str());
