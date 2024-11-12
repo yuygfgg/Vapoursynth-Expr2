@@ -183,7 +183,7 @@ public:
         }
         if (stack.size() <= n) {
             throw ExprError("Stack underflow in swap" + std::to_string(n) + 
-                          ": need " + std::to_string(n + 1) + " values");
+                            ": need " + std::to_string(n + 1) + " values");
         }
 
         temp_storage.clear();
@@ -202,7 +202,7 @@ public:
     void dupN(size_t n) {
         if (stack.size() <= n) {
             throw ExprError("Stack underflow in dup" + std::to_string(n) + 
-                          ": need " + std::to_string(n + 1) + " values");
+                            ": need " + std::to_string(n + 1) + " values");
         }
         
         temp_storage.clear();
@@ -248,7 +248,7 @@ public:
     float getResult() const {
         if (stack.size() != 1) {
             throw ExprError("Invalid expression evaluation: stack size = " + 
-                          std::to_string(stack.size()));
+                            std::to_string(stack.size()));
         }
         return stack.top();
     }
@@ -302,14 +302,14 @@ private:
             else if (auto op = registry.getOperator(token)) {
                 if (stackSize < op->minArgs) {
                     throw ExprError("Stack underflow at position " + std::to_string(i) + 
-                                  ": operator '" + token + "' requires " + 
-                                  std::to_string(op->minArgs) + " operands");
+                                    ": operator '" + token + "' requires " + 
+                                    std::to_string(op->minArgs) + " operands");
                 }
                 stackSize += op->deltaStack;
             }
             else {
                 throw ExprError("Invalid token at position " + std::to_string(i) + 
-                              ": '" + token + "'");
+                                ": '" + token + "'");
             }
             
             maxStackSize = std::max(maxStackSize, stackSize);
@@ -320,7 +320,7 @@ private:
         
         if (stackSize != 1) {
             throw ExprError("Invalid expression: should leave exactly one value on stack, " + 
-                          std::to_string(stackSize) + " values found");
+                            std::to_string(stackSize) + " values found");
         }
     }
 
@@ -475,13 +475,13 @@ struct ExprData {
 
 // 检查所有输入clip的格式是否兼容
 static bool checkVideoFormats(const VSVideoInfo* vi1, const VSVideoInfo* vi2) {
-    return vi1->format->colorFamily == vi2->format->colorFamily &&
-           vi1->format->sampleType == vi2->format->sampleType &&
-           vi1->format->bitsPerSample == vi2->format->bitsPerSample &&
-           vi1->format->subSamplingW == vi2->format->subSamplingW &&
-           vi1->format->subSamplingH == vi2->format->subSamplingH &&
-           vi1->width == vi2->width &&
-           vi1->height == vi2->height;
+    return  vi1->format->colorFamily == vi2->format->colorFamily &&
+            vi1->format->sampleType == vi2->format->sampleType &&
+            vi1->format->bitsPerSample == vi2->format->bitsPerSample &&
+            vi1->format->subSamplingW == vi2->format->subSamplingW &&
+            vi1->format->subSamplingH == vi2->format->subSamplingH &&
+            vi1->width == vi2->width &&
+            vi1->height == vi2->height;
 }
 
 static void VS_CC exprInit(VSMap* in, VSMap* out, void** instanceData, VSNode* node, VSCore* core, const VSAPI* vsapi) {
