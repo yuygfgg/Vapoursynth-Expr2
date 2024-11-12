@@ -394,6 +394,25 @@ public:
     }
 };
 
+struct ExecutableToken {
+    enum class Type {
+        Operator,
+        Variable,
+        Constant
+    } type;
+    
+    union {
+        const OperatorDescriptor* op;
+        int varIndex;
+        float constant;
+    };
+
+    ExecutableToken(const OperatorDescriptor* op) : type(Type::Operator), op(op) {}
+    ExecutableToken(int var) : type(Type::Variable), varIndex(var) {}
+    ExecutableToken(float val) : type(Type::Constant), constant(val) {}
+};
+
+
 // 表达式计算器
 class ExprCalculator {
 private:
@@ -412,51 +431,76 @@ private:
         return tokens;
     }
 
-    // 单个像素的计算，完全独立，无共享状态
-    float evaluatePixel(const std::vector<std::string>& tokens, const std::vector<float>& values) const {
-        std::vector<float> stack;  // 局部栈
-        stack.reserve(32);  // 预分配空间避免频繁重新分配
+    // 预编译表达式
+    std::vector<ExecutableToken> compileExpression(const std::string& expr) const {
+        std::vector<ExecutableToken> result;
+        auto tokens = tokenize(expr);
+        
+        for (const auto& token : tokens) {
+            if (auto op = registry.getOperator(token)) {
+                result.emplace_back(op);
+            }
+            else if (token == "x") {
+                result.emplace_back(0);
+            }
+            else if (token == "y") {
+                result.emplace_back(1);
+            }
+            else if (token == "z") {
+                result.emplace_back(2);
+            }
+            else if (token.length() == 1 && token[0] >= 'a' && token[0] <= 'w') {
+                result.emplace_back(token[0] - 'a' + 3);
+            }
+            else {
+                result.emplace_back(std::stof(token));
+            }
+        }
+        
+        return result;
+    }
 
-        for (size_t i = 0; i < tokens.size(); ++i) {
-            const auto& token = tokens[i];
+    // 使用预编译的表达式计算像素值
+    float evaluatePixel(const std::vector<ExecutableToken>& compiled, 
+                       const std::vector<float>& values) const {
+        std::vector<float> stack;
+        stack.reserve(32);
+
+        for (const auto& token : compiled) {
             try {
-                if (auto op = registry.getOperator(token)) {
-                    if (stack.size() < op->minArgs) {
-                        throw ExprError("Stack underflow at token '" + token + "'");
-                    }
+                switch (token.type) {
+                    case ExecutableToken::Type::Operator: {
+                        const auto& op = token.op;
+                        if (stack.size() < op->minArgs) {
+                            throw ExprError("Stack underflow");
+                        }
 
-                    std::vector<float> args(stack.end() - op->minArgs, stack.end());
-                    stack.erase(stack.end() - op->minArgs, stack.end());
+                        std::vector<float> args(stack.end() - op->minArgs, stack.end());
+                        stack.erase(stack.end() - op->minArgs, stack.end());
 
-                    if (op->resultType == OpResultType::Scalar) {
-                        auto f = std::get<std::function<float(const std::vector<float>&)>>(op->func);
-                        stack.push_back(f(args));
-                    } else {
-                        auto f = std::get<std::function<std::vector<float>(const std::vector<float>&)>>(op->func);
-                        auto results = f(args);
-                        stack.insert(stack.end(), results.begin(), results.end());
+                        if (op->resultType == OpResultType::Scalar) {
+                            auto f = std::get<std::function<float(const std::vector<float>&)>>(op->func);
+                            stack.push_back(f(args));
+                        } else {
+                            auto f = std::get<std::function<std::vector<float>(const std::vector<float>&)>>(op->func);
+                            auto results = f(args);
+                            stack.insert(stack.end(), results.begin(), results.end());
+                        }
+                        break;
                     }
-                }
-                else if (token == "x") {
-                    stack.push_back(values.size() > 0 ? values[0] : 0.0f);
-                }
-                else if (token == "y") {
-                    stack.push_back(values.size() > 1 ? values[1] : 0.0f);
-                }
-                else if (token == "z") {
-                    stack.push_back(values.size() > 2 ? values[2] : 0.0f);
-                }
-                else if (token.length() == 1 && token[0] >= 'a' && token[0] <= 'w') {
-                    int index = token[0] - 'a' + 3;
-                    stack.push_back(values.size() > index ? values[index] : 0.0f);
-                }
-                else {
-                    stack.push_back(std::stof(token));
+                    case ExecutableToken::Type::Variable: {
+                        int index = token.varIndex;
+                        stack.push_back(values.size() > index ? values[index] : 0.0f);
+                        break;
+                    }
+                    case ExecutableToken::Type::Constant: {
+                        stack.push_back(token.constant);
+                        break;
+                    }
                 }
             }
             catch (const std::exception& e) {
-                throw ExprError("Error at token '" + token + "' (position " + 
-                            std::to_string(i) + "): " + e.what());
+                throw ExprError(std::string("Evaluation error: ") + e.what());
             }
         }
 
@@ -477,22 +521,23 @@ public:
     }
 
     void processPlane(const std::string& expr,
-                    const std::vector<const uint8_t*>& srcps,
-                    const std::vector<int>& src_strides,
-                    uint8_t* dstp,
-                    int dst_stride,
-                    int width,
-                    int height,
-                    int plane,
-                    const VSFormat* fi) const 
+                     const std::vector<const uint8_t*>& srcps,
+                     const std::vector<int>& src_strides,
+                     uint8_t* dstp,
+                     int dst_stride,
+                     int width,
+                     int height,
+                     int plane,
+                     const VSFormat* fi) const 
     {
         bool isFloat = fi->sampleType == stFloat;
         int bits = fi->bitsPerSample;
         int maxValue = isFloat ? 1 : ((1 << bits) - 1);
         bool isChroma = (plane == 1 || plane == 2) && 
-                        (fi->colorFamily == cmYUV || fi->colorFamily == cmYCoCg);
+                       (fi->colorFamily == cmYUV || fi->colorFamily == cmYCoCg);
 
-        auto tokens = tokenize(expr);
+        // 预编译表达式
+        auto compiled = compileExpression(expr);
         std::vector<float> pixel_values(srcps.size());
 
         // 使用OpenMP进行并行处理
@@ -519,7 +564,7 @@ public:
                 }
 
                 // 计算表达式
-                float result = evaluatePixel(tokens, pixel_values);
+                float result = evaluatePixel(compiled, pixel_values);
 
                 // 写入结果
                 if (isFloat) {
