@@ -12,6 +12,7 @@
 #include <memory>
 #include <algorithm>
 
+// 异常类
 class ExprError : public std::exception {
 private:
     std::string msg;
@@ -20,7 +21,124 @@ public:
     const char* what() const noexcept override { return msg.c_str(); }
 };
 
-// 栈操作封装
+// 操作符描述
+struct OperatorDescriptor {
+    int minArgs;  // 最小参数数量
+    int maxArgs;  // 最大参数数量 
+    int deltaStack;  // 对栈大小的影响
+    std::function<float(const std::vector<float>&)> func;  // 实际运算函数
+    
+    static OperatorDescriptor createUnary(std::function<float(float)> f) {
+        return {1, 1, 0, [f](const std::vector<float>& args) { return f(args[0]); }};
+    }
+    
+    static OperatorDescriptor createBinary(std::function<float(float,float)> f) {
+        return {2, 2, -1, [f](const std::vector<float>& args) { return f(args[0], args[1]); }};
+    }
+    
+    static OperatorDescriptor createTernary(std::function<float(float,float,float)> f) {
+        return {3, 3, -2, [f](const std::vector<float>& args) { return f(args[0], args[1], args[2]); }};
+    }
+    
+    static OperatorDescriptor createStackOp(int minA, int maxA, int delta) {
+        return {minA, maxA, delta, nullptr};
+    }
+};
+
+// 操作符注册表
+class OperatorRegistry {
+private:
+    std::map<std::string, OperatorDescriptor> operators;
+    
+public:
+    void registerOperator(const std::string& name, const OperatorDescriptor& desc) {
+        operators[name] = desc;
+    }
+
+    const OperatorDescriptor* getOperator(const std::string& name) const {
+        auto it = operators.find(name);
+        return it != operators.end() ? &it->second : nullptr;
+    }
+    
+    void initDefaultOperators() {
+        // 基本算术运算符
+        registerOperator("+", OperatorDescriptor::createBinary([](float a, float b) { return a + b; }));
+        registerOperator("-", OperatorDescriptor::createBinary([](float a, float b) { return a - b; }));
+        registerOperator("*", OperatorDescriptor::createBinary([](float a, float b) { return a * b; }));
+        registerOperator("/", OperatorDescriptor::createBinary([](float a, float b) { 
+            if (b == 0) throw ExprError("Division by zero");
+            return a / b; 
+        }));
+
+        // 数学函数
+        registerOperator("exp", OperatorDescriptor::createUnary([](float a) {
+            if (a > 88) throw ExprError("exp overflow");
+            return std::exp(a);
+        }));
+        registerOperator("log", OperatorDescriptor::createUnary([](float a) {
+            if (a <= 0) throw ExprError("log domain error");
+            return std::log(a);
+        }));
+        registerOperator("sqrt", OperatorDescriptor::createUnary([](float a) {
+            if (a < 0) throw ExprError("sqrt domain error");
+            return std::sqrt(a);
+        }));
+        registerOperator("sin", OperatorDescriptor::createUnary([](float a) { return std::sin(a); }));
+        registerOperator("cos", OperatorDescriptor::createUnary([](float a) { return std::cos(a); }));
+        registerOperator("abs", OperatorDescriptor::createUnary([](float a) { return std::abs(a); }));
+        registerOperator("not", OperatorDescriptor::createUnary([](float a) { return a > 0 ? 0.0f : 1.0f; }));
+
+        // 比较运算符
+        registerOperator(">", OperatorDescriptor::createBinary([](float a, float b) { return a > b ? 1.0f : 0.0f; }));
+        registerOperator("<", OperatorDescriptor::createBinary([](float a, float b) { return a < b ? 1.0f : 0.0f; }));
+        registerOperator("=", OperatorDescriptor::createBinary([](float a, float b) { return a == b ? 1.0f : 0.0f; }));
+        registerOperator(">=", OperatorDescriptor::createBinary([](float a, float b) { return a >= b ? 1.0f : 0.0f; }));
+        registerOperator("<=", OperatorDescriptor::createBinary([](float a, float b) { return a <= b ? 1.0f : 0.0f; }));
+
+        // 逻辑运算符
+        registerOperator("and", OperatorDescriptor::createBinary([](float a, float b) { 
+            return (a > 0 && b > 0) ? 1.0f : 0.0f; 
+        }));
+        registerOperator("or", OperatorDescriptor::createBinary([](float a, float b) { 
+            return (a > 0 || b > 0) ? 1.0f : 0.0f; 
+        }));
+        registerOperator("xor", OperatorDescriptor::createBinary([](float a, float b) { 
+            return ((a > 0) != (b > 0)) ? 1.0f : 0.0f; 
+        }));
+
+        // 其他数学运算符
+        registerOperator("max", OperatorDescriptor::createBinary([](float a, float b) { return std::max(a, b); }));
+        registerOperator("min", OperatorDescriptor::createBinary([](float a, float b) { return std::min(a, b); }));
+        registerOperator("pow", OperatorDescriptor::createBinary([](float a, float b) { 
+            if (a < 0) throw ExprError("pow domain error");
+            float result = std::pow(a, b);
+            if (result > 3e38f || result < 1e-38f) 
+                throw ExprError("pow range error");
+            return result;
+        }));
+
+        // 三元运算符
+        registerOperator("?", OperatorDescriptor::createTernary([](float c, float t, float f) { 
+            return c > 0 ? t : f; 
+        }));
+
+        // 栈操作
+        registerOperator("dup", OperatorDescriptor::createStackOp(1, 1, 1));
+        registerOperator("swap", OperatorDescriptor::createStackOp(2, 2, 0));
+        
+        // 动态生成 dupN 和 swapN
+        for (int i = 0; i <= 25; ++i) {
+            registerOperator("dup" + std::to_string(i), 
+                OperatorDescriptor::createStackOp(i + 1, i + 1, 1));
+            if (i > 0) {
+                registerOperator("swap" + std::to_string(i),
+                    OperatorDescriptor::createStackOp(i + 1, i + 1, 0));
+            }
+        }
+    }
+};
+
+// 栈操作类
 class ExprStack {
 private:
     std::stack<float> stack;
@@ -38,7 +156,7 @@ public:
     template<typename... Args>
     void getOperands(Args&... args) {
         if (stack.size() < sizeof...(Args)) {
-            throw std::runtime_error("Stack underflow");
+            throw ExprError("Stack underflow");
         }
         (getOne(args), ...);
     }
@@ -49,7 +167,7 @@ public:
 
     float peekAt(size_t n) const {
         if (stack.size() <= n) {
-            throw std::runtime_error("Stack underflow in peek operation");
+            throw ExprError("Stack underflow in peek operation");
         }
         
         auto temp = stack;
@@ -65,79 +183,52 @@ public:
         }
         if (stack.size() <= n) {
             throw ExprError("Stack underflow in swap" + std::to_string(n) + 
-                            ": need " + std::to_string(n + 1) + " values");
+                          ": need " + std::to_string(n + 1) + " values");
         }
 
-        // 清空临时存储
         temp_storage.clear();
-        
-        // 保存top到n位置的值
         for (size_t i = 0; i <= n; ++i) {
             temp_storage.push_back(stack.top());
             stack.pop();
         }
         
-        // 按照正确的顺序放回
-        // 首先放回原来的top值
         stack.push(temp_storage[0]);
-        
-        // 然后是中间的值（如果有的话）
         for (size_t i = temp_storage.size() - 1; i > 1; --i) {
             stack.push(temp_storage[i]);
         }
-        
-        // 最后放回要交换的值
         stack.push(temp_storage[1]);
     }
 
     void dupN(size_t n) {
         if (stack.size() <= n) {
             throw ExprError("Stack underflow in dup" + std::to_string(n) + 
-                            ": need " + std::to_string(n + 1) + " values");
+                          ": need " + std::to_string(n + 1) + " values");
         }
         
-        // 保存需要的值
         temp_storage.clear();
         for (size_t i = 0; i < n + 1; ++i) {
             temp_storage.push_back(stack.top());
             stack.pop();
         }
         
-        // 先将值放回去
         for (auto it = temp_storage.rbegin(); it != temp_storage.rend(); ++it) {
             stack.push(*it);
         }
         
-        // 然后将要复制的值压入栈顶
         stack.push(temp_storage[temp_storage.size() - 1]);
     }
 
-    template<typename Func>
-    void unaryOp(Func op) {
-        float a;
-        getOperands(a);
-        pushResult(op(a));
-    }
-
-    template<typename Func>
-    void binaryOp(Func op) {
-        float b, a;
-        getOperands(b, a);
-        pushResult(op(a, b));
-    }
-
-    template<typename Func>
-    void ternaryOp(Func op) {
-        float c, b, a;
-        getOperands(c, b, a);
-        pushResult(op(a, b, c));
-    }
-
-    float getResult() const {
-        if (stack.size() != 1) {
-            throw std::runtime_error("Invalid expression evaluation");
+    std::vector<float> getTopN(size_t n) {
+        if (stack.size() < n) {
+            throw ExprError("Stack underflow in getTopN operation");
         }
-        return stack.top();
+        
+        std::vector<float> result(n);
+        for (size_t i = 0; i < n; ++i) {
+            result[n - 1 - i] = stack.top();
+            stack.pop();
+        }
+        return result;
     }
 
     void push(float value) {
@@ -148,6 +239,18 @@ public:
         while (!stack.empty()) {
             stack.pop();
         }
+    }
+
+    size_t size() const {
+        return stack.size();
+    }
+
+    float getResult() const {
+        if (stack.size() != 1) {
+            throw ExprError("Invalid expression evaluation: stack size = " + 
+                          std::to_string(stack.size()));
+        }
+        return stack.top();
     }
 
     std::string debugStack() const {
@@ -166,122 +269,11 @@ public:
     }
 };
 
-// 操作符管理
-class OperatorManager {
-private:
-    using OperatorFunc = std::function<void(ExprStack&)>;
-    std::map<std::string, OperatorFunc> operators;
-
-public:
-    void registerUnaryOp(const std::string& token, std::function<float(float)> func) {
-        operators[token] = [func](ExprStack& stack) {
-            stack.unaryOp(func);
-        };
-    }
-
-    void registerBinaryOp(const std::string& token, std::function<float(float, float)> func) {
-        operators[token] = [func](ExprStack& stack) {
-            stack.binaryOp(func);
-        };
-    }
-
-    void registerTernaryOp(const std::string& token, std::function<float(float, float, float)> func) {
-        operators[token] = [func](ExprStack& stack) {
-            stack.ternaryOp(func);
-        };
-    }
-
-    bool hasOperator(const std::string& token) const {
-        return operators.find(token) != operators.end();
-    }
-
-    void executeOperator(const std::string& token, ExprStack& stack) const {
-        auto it = operators.find(token);
-        if (it != operators.end()) {
-            it->second(stack);
-        } else {
-            throw std::runtime_error("Unknown operator: " + token);
-        }
-    }
-
-    void initDefaultOperators() {
-        // 基本算术运算符
-        registerBinaryOp("+", [](float a, float b) { return a + b; });
-        registerBinaryOp("-", [](float a, float b) { return a - b; });
-        registerBinaryOp("*", [](float a, float b) { return a * b; });
-        registerBinaryOp("/", [](float a, float b) { 
-            if (b == 0) throw std::runtime_error("Division by zero");
-            return a / b; 
-        });
-
-        // 数学函数
-        registerUnaryOp("exp", [](float a) { 
-            if (a > 88) throw std::runtime_error("exp overflow");
-            return std::exp(a); 
-        });
-        registerUnaryOp("log", [](float a) { 
-            if (a <= 0) throw std::runtime_error("log domain error");
-            return std::log(a); 
-        });
-        registerUnaryOp("sqrt", [](float a) { 
-            if (a < 0) throw std::runtime_error("sqrt domain error");
-            return std::sqrt(a); 
-        });
-        registerUnaryOp("sin", [](float a) { return std::sin(a); });
-        registerUnaryOp("cos", [](float a) { return std::cos(a); });
-        registerUnaryOp("abs", [](float a) { return std::abs(a); });
-        registerUnaryOp("not", [](float a) { return a > 0 ? 0.0f : 1.0f; });
-
-        // 比较运算符
-        registerBinaryOp(">", [](float a, float b) { return a > b ? 1.0f : 0.0f; });
-        registerBinaryOp("<", [](float a, float b) { return a < b ? 1.0f : 0.0f; });
-        registerBinaryOp("=", [](float a, float b) { return a == b ? 1.0f : 0.0f; });
-        registerBinaryOp(">=", [](float a, float b) { return a >= b ? 1.0f : 0.0f; });
-        registerBinaryOp("<=", [](float a, float b) { return a <= b ? 1.0f : 0.0f; });
-
-        // 逻辑运算符
-        registerBinaryOp("and", [](float a, float b) { return (a > 0 && b > 0) ? 1.0f : 0.0f; });
-        registerBinaryOp("or", [](float a, float b) { return (a > 0 || b > 0) ? 1.0f : 0.0f; });
-        registerBinaryOp("xor", [](float a, float b) { 
-            return ((a > 0) != (b > 0)) ? 1.0f : 0.0f; 
-        });
-
-        // 其他数学运算符
-        registerBinaryOp("max", [](float a, float b) { return std::max(a, b); });
-        registerBinaryOp("min", [](float a, float b) { return std::min(a, b); });
-        registerBinaryOp("pow", [](float a, float b) { 
-            if (a < 0) throw std::runtime_error("pow domain error");
-            float result = std::pow(a, b);
-            if (result > 3e38f || result < 1e-38f) 
-                throw std::runtime_error("pow range error");
-            return result;
-        });
-
-        // 栈操作
-        operators["dup"] = [](ExprStack& stack) { stack.dupN(0); };
-        for (int i = 0; i <= 25; ++i) {
-            operators["dup" + std::to_string(i)] = [i](ExprStack& stack) {
-                stack.dupN(i);
-            };
-        }
-
-        operators["swap"] = [](ExprStack& stack) { stack.swapN(1); };
-        for (int i = 1; i <= 25; ++i) {
-            operators["swap" + std::to_string(i)] = [i](ExprStack& stack) {
-                stack.swapN(i);
-            };
-        }
-
-        // 三元运算符
-        registerTernaryOp("?", [](float cond, float t, float f) { 
-            return cond > 0 ? t : f; 
-        });
-    }
-};
-
-// 语法检查器类
+// 语法检查器
 class ExpressionValidator {
 private:
+    const OperatorRegistry& registry;
+    
     static bool isNumber(const std::string& token) {
         try {
             size_t pos;
@@ -297,91 +289,45 @@ private:
         return token.length() == 1 && token[0] >= 'a' && token[0] <= 'w';
     }
 
-    static bool isOperator(const std::string& token) {
-        static const std::set<std::string> operators = {
-            "+", "-", "*", "/", "exp", "log", "sqrt", "sin", "cos", "abs", "not",
-            ">", "<", "=", ">=", "<=", "and", "or", "xor", "max", "min", "pow", "?",
-            "dup", "swap"
-        };
-        
-        // 检查基本运算符
-        if (operators.find(token) != operators.end()) return true;
-        
-        // 检查 dupN 和 swapN
-        if (token.substr(0, 3) == "dup" || token.substr(0, 4) == "swap") {
-            try {
-                size_t pos;
-                int n = std::stoi(token.substr(token.find_first_of("0123456789")), &pos);
-                return n >= 0 && n <= 25;
-            } catch (...) {
-                return false;
-            }
-        }
-        
-        return false;
-    }
-
-    static void validateStackEffect(const std::vector<std::string>& tokens) {
+    void validateStackEffect(const std::vector<std::string>& tokens) {
         int stackSize = 0;
         int maxStackSize = 0;
         
         for (size_t i = 0; i < tokens.size(); ++i) {
             const auto& token = tokens[i];
             
-            // 数字和变量入栈
             if (isNumber(token) || isVariable(token)) {
                 stackSize++;
             }
-            // 运算符处理
-            else if (isOperator(token)) {
-                if (token == "?") {
-                    if (stackSize < 3) throw ExprError(
-                        "Stack underflow at position " + std::to_string(i) + 
-                        ": ternary operator '?' requires 3 operands");
-                    stackSize -= 2;
+            else if (auto op = registry.getOperator(token)) {
+                if (stackSize < op->minArgs) {
+                    throw ExprError("Stack underflow at position " + std::to_string(i) + 
+                                  ": operator '" + token + "' requires " + 
+                                  std::to_string(op->minArgs) + " operands");
                 }
-                else if (token.substr(0, 3) == "dup") {
-                    if (stackSize < 1) throw ExprError(
-                        "Stack underflow at position " + std::to_string(i) + 
-                        ": dup requires at least 1 value on stack");
-                    stackSize++;
-                }
-                else if (token.substr(0, 4) == "swap") {
-                    if (stackSize < 2) throw ExprError(
-                        "Stack underflow at position " + std::to_string(i) + 
-                        ": swap requires at least 2 values on stack");
-                }
-                else if (token == "not" || token == "abs" || token == "exp" || 
-                        token == "log" || token == "sqrt" || token == "sin" || 
-                        token == "cos") {
-                    if (stackSize < 1) throw ExprError(
-                        "Stack underflow at position " + std::to_string(i) + 
-                        ": unary operator '" + token + "' requires 1 operand");
-                }
-                else {
-                    if (stackSize < 2) throw ExprError(
-                        "Stack underflow at position " + std::to_string(i) + 
-                        ": binary operator '" + token + "' requires 2 operands");
-                    stackSize--;
-                }
+                stackSize += op->deltaStack;
             }
             else {
                 throw ExprError("Invalid token at position " + std::to_string(i) + 
-                                ": '" + token + "'");
+                              ": '" + token + "'");
             }
             
             maxStackSize = std::max(maxStackSize, stackSize);
-            if (maxStackSize > 100) throw ExprError("Stack size limit exceeded");
+            if (maxStackSize > 100) {
+                throw ExprError("Stack size limit exceeded");
+            }
         }
         
         if (stackSize != 1) {
             throw ExprError("Invalid expression: should leave exactly one value on stack, " + 
-                            std::to_string(stackSize) + " values found");
+                          std::to_string(stackSize) + " values found");
         }
     }
 
 public:
-    static void validate(const std::string& expr, int numClips) {
+    ExpressionValidator(const OperatorRegistry& reg) : registry(reg) {}
+
+    void validate(const std::string& expr, int numClips) {
         if (expr.empty()) return;  // 空表达式是合法的
 
         std::vector<std::string> tokens;
@@ -425,8 +371,9 @@ public:
 // 表达式计算器
 class ExprCalculator {
 private:
-    OperatorManager opManager;
+    OperatorRegistry registry;
     ExprStack stack;
+    ExpressionValidator validator;
 
     std::vector<std::string> tokenize(const std::string& expr) {
         std::vector<std::string> tokens;
@@ -441,14 +388,17 @@ private:
     }
 
 public:
-    ExprCalculator() {
-        opManager.initDefaultOperators();
+    ExprCalculator() : validator(registry) {
+        registry.initDefaultOperators();
+    }
+
+    void validate(const std::string& expr, int numClips) {
+        validator.validate(expr, numClips);
     }
 
     float evaluate(const std::string& expr, const std::vector<float>& values) {
         if (expr.empty()) {
-            if (values.empty()) return 0.0f;
-            return values[0];
+            return values.empty() ? 0.0f : values[0];
         }
 
         try {
@@ -458,26 +408,22 @@ public:
             for (size_t i = 0; i < tokens.size(); ++i) {
                 const auto& token = tokens[i];
                 try {
-                    if (token.substr(0, 4) == "swap") {
-                        int n;
-                        if (token == "swap") {
-                            n = 1;
+                    if (auto op = registry.getOperator(token)) {
+                        if (op->func) {
+                            // 收集参数并执行函数
+                            auto args = stack.getTopN(op->minArgs);
+                            stack.push(op->func(args));
                         } else {
-                            n = std::stoi(token.substr(4));
+                            // 特殊栈操作
+                            if (token.substr(0, 3) == "dup") {
+                                int n = token == "dup" ? 0 : std::stoi(token.substr(3));
+                                stack.dupN(n);
+                            }
+                            else if (token.substr(0, 4) == "swap") {
+                                int n = token == "swap" ? 1 : std::stoi(token.substr(4));
+                                stack.swapN(n);
+                            }
                         }
-                        stack.swapN(n);
-                    }
-                    else if (token.substr(0, 3) == "dup") {
-                        int n;
-                        if (token == "dup") {
-                            n = 0;
-                        } else {
-                            n = std::stoi(token.substr(3));
-                        }
-                        stack.dupN(n);
-                    }
-                    else if (opManager.hasOperator(token)) {
-                        opManager.executeOperator(token, stack);
                     }
                     else if (token == "x") {
                         stack.push(values.size() > 0 ? values[0] : 0.0f);
@@ -512,9 +458,13 @@ public:
             throw ExprError("Expression evaluation error: " + std::string(e.what()));
         }
     }
+
+    void registerOperator(const std::string& name, const OperatorDescriptor& desc) {
+        registry.registerOperator(name, desc);
+    }
 };
 
-// VapourSynth插件结构
+// VapourSynth 插件结构
 struct ExprData {
     VSNodeRef* nodes[26];  // 支持x,y,z + a-w共26个输入clip
     int numNodes;
@@ -609,18 +559,15 @@ static const VSFrameRef* VS_CC exprGetFrame(int n, int activationReason, void** 
                         float value;
                         if (isFloat) {
                             value = reinterpret_cast<const float*>(srcp + y * src_stride)[x];
-                            // 对于浮点格式，UV平面需要特殊处理
                             if ((plane == 1 || plane == 2) &&
                                 (fi->colorFamily == cmYUV || fi->colorFamily == cmYCoCg)) {
-                                value += 0.5f;  // 从[-0.5,0.5]转换到[0,1]
+                                value += 0.5f;
                             }
-                        }
-                        else {
+                        } else {
                             if (bits > 8) {
                                 value = static_cast<float>(reinterpret_cast<const uint16_t*>(
                                     srcp + y * src_stride)[x]);
-                            }
-                            else {
+                            } else {
                                 value = static_cast<float>(srcp[y * src_stride + x]);
                             }
                         }
@@ -632,20 +579,17 @@ static const VSFrameRef* VS_CC exprGetFrame(int n, int activationReason, void** 
 
                     // 写入结果
                     if (isFloat) {
-                        // 对于浮点格式，UV平面需要特殊处理
                         if ((plane == 1 || plane == 2) &&
                             (fi->colorFamily == cmYUV || fi->colorFamily == cmYCoCg)) {
-                            result -= 0.5f;  // 转回[-0.5,0.5]范围
+                            result -= 0.5f;
                         }
                         reinterpret_cast<float*>(dstp + y * dst_stride)[x] = result;
-                    }
-                    else {
+                    } else {
                         result = std::clamp(result, 0.0f, static_cast<float>(maxValue));
                         if (bits > 8) {
                             reinterpret_cast<uint16_t*>(dstp + y * dst_stride)[x] =
                                 static_cast<uint16_t>(result);
-                        }
-                        else {
+                        } else {
                             dstp[y * dst_stride + x] = static_cast<uint8_t>(result);
                         }
                     }
@@ -661,17 +605,14 @@ static const VSFrameRef* VS_CC exprGetFrame(int n, int activationReason, void** 
         return dst;
     }
     catch (const std::exception& e) {
-        // 发生异常时，释放已分配的帧
         if (dst) {
             vsapi->freeFrame(dst);
         }
         for (const auto& frame : src_frames) {
-            if (frame != nullptr) {
+            if (frame) {
                 vsapi->freeFrame(frame);
             }
         }
-
-        // 设置错误信息并返回 nullptr
         vsapi->setFilterError(("Expr: " + std::string(e.what())).c_str(), frameCtx);
         return nullptr;
     }
@@ -686,65 +627,58 @@ static void VS_CC exprFree(void* instanceData, VSCore* core, const VSAPI* vsapi)
 }
 
 static void VS_CC exprCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const VSAPI* vsapi) {
-    std::unique_ptr<ExprData> d(new ExprData());
-    int err;
+    try {
+        std::unique_ptr<ExprData> d(new ExprData());
+        int err;
 
-    // 获取输入clips
-    d->numNodes = vsapi->propNumElements(in, "clips");
-    if (d->numNodes < 1 || d->numNodes > 26) {
-        vsapi->setError(out, "Expr: Must specify between 1 and 26 input clips");
-        return;
-    }
-
-    // 获取所有输入clip并检查格式
-    for (int i = 0; i < d->numNodes; i++) {
-        d->nodes[i] = vsapi->propGetNode(in, "clips", i, &err);
-        const VSVideoInfo* vi = vsapi->getVideoInfo(d->nodes[i]);
-        
-        if (i == 0) {
-            d->vi = vsapi->getVideoInfo(d->nodes[0]);
-        } else if (!checkVideoFormats(d->vi, vi)) {
-            for (int j = 0; j <= i; j++) {
-                vsapi->freeNode(d->nodes[j]);
-            }
-            vsapi->setError(out, "Expr: All inputs must have the same format and dimensions");
-            return;
+        // 获取输入clips
+        d->numNodes = vsapi->propNumElements(in, "clips");
+        if (d->numNodes < 1 || d->numNodes > 26) {
+            throw ExprError("Must specify between 1 and 26 input clips");
         }
-    }
 
-    // 获取表达式
-    int num_expr = vsapi->propNumElements(in, "expr");
-    if (num_expr < 1) {
+        // 获取所有输入clip并检查格式
         for (int i = 0; i < d->numNodes; i++) {
-            vsapi->freeNode(d->nodes[i]);
+            d->nodes[i] = vsapi->propGetNode(in, "clips", i, &err);
+            const VSVideoInfo* vi = vsapi->getVideoInfo(d->nodes[i]);
+            
+            if (i == 0) {
+                d->vi = vsapi->getVideoInfo(d->nodes[0]);
+            } else if (!checkVideoFormats(d->vi, vi)) {
+                throw ExprError("All inputs must have the same format and dimensions");
+            }
         }
-        vsapi->setError(out, "Expr: At least one expression must be specified");
-        return;
-    }
 
-    // 为每个平面获取表达式
-    for (int i = 0; i < num_expr && i < d->vi->format->numPlanes; i++) {
-        d->expressions.push_back(vsapi->propGetData(in, "expr", i, &err));
-    }
+        // 获取表达式
+        int num_expr = vsapi->propNumElements(in, "expr");
+        if (num_expr < 1) {
+            throw ExprError("At least one expression must be specified");
+        }
 
-    // 如果表达式数量少于平面数量，用最后一个表达式补充
-    while (d->expressions.size() < d->vi->format->numPlanes) {
-        d->expressions.push_back(d->expressions.back());
-    }
+        // 为每个平面获取表达式并验证
+        for (int i = 0; i < num_expr && i < d->vi->format->numPlanes; i++) {
+            std::string expr = vsapi->propGetData(in, "expr", i, &err);
+            d->calculator.validate(expr, d->numNodes);  // 验证表达式
+            d->expressions.push_back(expr);
+        }
 
-    // 创建过滤器
-    #if VAPOURSYNTH_API_VERSION >= 4
+        // 如果表达式数量少于平面数量，用最后一个表达式补充
+        while (d->expressions.size() < d->vi->format->numPlanes) {
+            d->expressions.push_back(d->expressions.back());
+        }
+
+        // 创建过滤器
         vsapi->createFilter(in, out, "Expr", exprInit, exprGetFrame, exprFree, 
             fmParallel, 0, d.release(), core);
-    #else
-        VSFilterDependency deps[] = {{d->nodes[0], rpStrictSpatial}};
-        vsapi->createFilter(in, out, "Expr", exprInit, exprGetFrame, exprFree, 
-            fmParallel, deps, 1, d.release(), core);
-    #endif
+    }
+    catch (const std::exception& e) {
+        vsapi->setError(out, ("Expr: " + std::string(e.what())).c_str());
+        return;
+    }
 }
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin* plugin) {
-    configFunc("com.yuygfgg.expr2", "expr",
+    configFunc("com.example.expr2", "expr",
         "VapourSynth Expression Evaluation Plugin",
         VAPOURSYNTH_API_VERSION, 1, plugin);
 
@@ -752,3 +686,4 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegiste
         "clips:clip[];expr:data[];",
         exprCreate, nullptr, plugin);
 }
+
