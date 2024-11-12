@@ -202,65 +202,6 @@ private:
         return staticOperators;
     }
 
-    // 动态操作符模式处理
-    // static const std::vector<DynamicPattern>& getDynamicPatterns() {
-    //     static const std::vector<DynamicPattern> patterns = {
-    //         // dup pattern
-    //         {
-    //             "dup",
-    //             [](const std::string& token) {
-    //                 if (token == "dup") return true;
-    //                 if (!token.starts_with("dup")) return false;
-    //                 try {
-    //                     int n = std::stoi(token.substr(3));
-    //                     return n >= 0 && n <= 25;
-    //                 } catch (...) {
-    //                     return false;
-    //                 }
-    //             },
-    //             [](const std::string& token) {
-    //                 int n = token == "dup" ? 0 : std::stoi(token.substr(3));
-    //                 return OperatorDescriptor{
-    //                     n + 1, n + 1, 1,
-    //                     OpResultType::Vector,
-    //                     [n](const std::vector<float>& args) -> std::vector<float> {
-    //                         std::vector<float> results = args;
-    //                         results.push_back(args[args.size() - n - 1]);
-    //                         return results;
-    //                     }
-    //                 };
-    //             }
-    //         },
-    //         // swap pattern
-    //         {
-    //             "swap",
-    //             [](const std::string& token) {
-    //                 if (token == "swap") return true;
-    //                 if (!token.starts_with("swap")) return false;
-    //                 try {
-    //                     int n = std::stoi(token.substr(4));
-    //                     return n >= 1 && n <= 25;
-    //                 } catch (...) {
-    //                     return false;
-    //                 }
-    //             },
-    //             [](const std::string& token) {
-    //                 int n = token == "swap" ? 1 : std::stoi(token.substr(4));
-    //                 return OperatorDescriptor{
-    //                     n + 1, n + 1, 0,
-    //                     OpResultType::Vector,
-    //                     [n](const std::vector<float>& args) -> std::vector<float> {
-    //                         std::vector<float> results = args;
-    //                         std::swap(results[0], results[n]);
-    //                         return results;
-    //                     }
-    //                 };
-    //             }
-    //         }
-    //     };
-    //     return patterns;
-    // }
-
     mutable std::map<std::string, OperatorDescriptor> dynamicOperators;
 
 public:
@@ -578,8 +519,6 @@ public:
         auto compiled = compileExpression(expr);
         std::vector<float> pixel_values(srcps.size());
 
-        // 使用OpenMP进行并行处理
-        #pragma omp simd
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 // 收集所有输入clip在当前位置的像素值
@@ -794,11 +733,11 @@ static void VS_CC exprCreate(const VSMap* in, VSMap* out, void* userData, VSCore
 }
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin* plugin) {
-    configFunc("com.yuygfgg.expr2", "expr",
+    configFunc("com.yuygfgg.expr2", "yuygfgg",
         "VapourSynth Expression Evaluation Plugin",
         VAPOURSYNTH_API_VERSION, 1, plugin);
 
-    registerFunc("Eval",
+    registerFunc("Expr",
         "clips:clip[];expr:data[];",
         exprCreate, nullptr, plugin);
 }
