@@ -85,6 +85,36 @@ struct OperatorPattern {
     {name, {3, 3, -2, OpResultType::Scalar, \
         [](const std::vector<float>& args) -> float { return impl(args[0], args[1], args[2]); }}}
 
+#define DEFINE_DUP_OP(n) \
+    {"dup" #n, {(n + 1), (n + 1), 1, OpResultType::Vector, \
+        [](const std::vector<float>& args) -> std::vector<float> { \
+            std::vector<float> results = args; \
+            results.push_back(args[args.size() - n - 1]); \
+            return results; \
+        }}}
+
+#define DEFINE_SWAP_OP(n) \
+    {"swap" #n, {(n + 1), (n + 1), 0, OpResultType::Vector, \
+        [](const std::vector<float>& args) -> std::vector<float> { \
+            std::vector<float> results = args; \
+            std::swap(results[0], results[n]); \
+            return results; \
+        }}}
+
+#define DEFINE_DUP_OPS_RANGE(start, end) \
+    DEFINE_DUP_OP(start), \
+    DEFINE_DUP_OP(start+1), \
+    DEFINE_DUP_OP(start+2), \
+    /* ... */ \
+    DEFINE_DUP_OP(end)
+
+#define DEFINE_SWAP_OPS_RANGE(start, end) \
+    DEFINE_SWAP_OP(start), \
+    DEFINE_SWAP_OP(start+1), \
+    DEFINE_SWAP_OP(start+2), \
+    /* ... */ \
+    DEFINE_SWAP_OP(end)
+
 class OperatorRegistry {
 private:
     struct DynamicPattern {
@@ -146,92 +176,99 @@ private:
             }),
 
             // 三元运算符
-            DEFINE_TERNARY_OP("?", [](float c, float t, float f) { return c > 0 ? t : f; })
+            DEFINE_TERNARY_OP("?", [](float c, float t, float f) { return c > 0 ? t : f; }),
+
+            {
+                "dup", {1, 1, 1, OpResultType::Vector,
+                    [](const std::vector<float>& args) -> std::vector<float> {
+                        std::vector<float> results = args;
+                        results.push_back(args.back());
+                        return results;
+                    }
+                }
+            },
+            {
+                "swap", {2, 2, 0, OpResultType::Vector,
+                    [](const std::vector<float>& args) -> std::vector<float> {
+                        std::vector<float> results = args;
+                        std::swap(results[0], results[1]);
+                        return results;
+                    }
+                }
+            },
+            DEFINE_DUP_OPS_RANGE(1, 25),  // 生成dup1到dup25
+            DEFINE_SWAP_OPS_RANGE(1, 25)  // 生成swap1到swap25
         };
         return staticOperators;
     }
 
-    // 动态操作符模式处理保持不变
-    static const std::vector<DynamicPattern>& getDynamicPatterns() {
-        static const std::vector<DynamicPattern> patterns = {
-            // dup pattern
-            {
-                "dup",
-                [](const std::string& token) {
-                    if (token == "dup") return true;
-                    if (!token.starts_with("dup")) return false;
-                    try {
-                        int n = std::stoi(token.substr(3));
-                        return n >= 0 && n <= 25;
-                    } catch (...) {
-                        return false;
-                    }
-                },
-                [](const std::string& token) {
-                    int n = token == "dup" ? 0 : std::stoi(token.substr(3));
-                    return OperatorDescriptor{
-                        n + 1, n + 1, 1,
-                        OpResultType::Vector,
-                        [n](const std::vector<float>& args) -> std::vector<float> {
-                            std::vector<float> results = args;
-                            results.push_back(args[args.size() - n - 1]);
-                            return results;
-                        }
-                    };
-                }
-            },
-            // swap pattern
-            {
-                "swap",
-                [](const std::string& token) {
-                    if (token == "swap") return true;
-                    if (!token.starts_with("swap")) return false;
-                    try {
-                        int n = std::stoi(token.substr(4));
-                        return n >= 1 && n <= 25;
-                    } catch (...) {
-                        return false;
-                    }
-                },
-                [](const std::string& token) {
-                    int n = token == "swap" ? 1 : std::stoi(token.substr(4));
-                    return OperatorDescriptor{
-                        n + 1, n + 1, 0,
-                        OpResultType::Vector,
-                        [n](const std::vector<float>& args) -> std::vector<float> {
-                            std::vector<float> results = args;
-                            std::swap(results[0], results[n]);
-                            return results;
-                        }
-                    };
-                }
-            }
-        };
-        return patterns;
-    }
+    // 动态操作符模式处理
+    // static const std::vector<DynamicPattern>& getDynamicPatterns() {
+    //     static const std::vector<DynamicPattern> patterns = {
+    //         // dup pattern
+    //         {
+    //             "dup",
+    //             [](const std::string& token) {
+    //                 if (token == "dup") return true;
+    //                 if (!token.starts_with("dup")) return false;
+    //                 try {
+    //                     int n = std::stoi(token.substr(3));
+    //                     return n >= 0 && n <= 25;
+    //                 } catch (...) {
+    //                     return false;
+    //                 }
+    //             },
+    //             [](const std::string& token) {
+    //                 int n = token == "dup" ? 0 : std::stoi(token.substr(3));
+    //                 return OperatorDescriptor{
+    //                     n + 1, n + 1, 1,
+    //                     OpResultType::Vector,
+    //                     [n](const std::vector<float>& args) -> std::vector<float> {
+    //                         std::vector<float> results = args;
+    //                         results.push_back(args[args.size() - n - 1]);
+    //                         return results;
+    //                     }
+    //                 };
+    //             }
+    //         },
+    //         // swap pattern
+    //         {
+    //             "swap",
+    //             [](const std::string& token) {
+    //                 if (token == "swap") return true;
+    //                 if (!token.starts_with("swap")) return false;
+    //                 try {
+    //                     int n = std::stoi(token.substr(4));
+    //                     return n >= 1 && n <= 25;
+    //                 } catch (...) {
+    //                     return false;
+    //                 }
+    //             },
+    //             [](const std::string& token) {
+    //                 int n = token == "swap" ? 1 : std::stoi(token.substr(4));
+    //                 return OperatorDescriptor{
+    //                     n + 1, n + 1, 0,
+    //                     OpResultType::Vector,
+    //                     [n](const std::vector<float>& args) -> std::vector<float> {
+    //                         std::vector<float> results = args;
+    //                         std::swap(results[0], results[n]);
+    //                         return results;
+    //                     }
+    //                 };
+    //             }
+    //         }
+    //     };
+    //     return patterns;
+    // }
 
     mutable std::map<std::string, OperatorDescriptor> dynamicOperators;
 
 public:
     const OperatorDescriptor* getOperator(const std::string& token) const {
-        // 实现保持不变
         const auto& staticOps = getStaticOperators();
         auto staticIt = staticOps.find(token);
         if (staticIt != staticOps.end()) {
             return &staticIt->second;
-        }
-
-        auto dynamicIt = dynamicOperators.find(token);
-        if (dynamicIt != dynamicOperators.end()) {
-            return &dynamicIt->second;
-        }
-
-        const auto& patterns = getDynamicPatterns();
-        for (const auto& pattern : patterns) {
-            if (token.starts_with(pattern.prefix) && pattern.matcher(token)) {
-                auto& inserted = dynamicOperators[token] = pattern.generator(token);
-                return &inserted;
-            }
         }
         return nullptr;
     }
