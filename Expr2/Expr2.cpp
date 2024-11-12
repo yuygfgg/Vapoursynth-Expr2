@@ -41,21 +41,21 @@ private:
             DEFINE_BINARY_OP("-", [](float a, float b) { return a - b; }),
             DEFINE_BINARY_OP("*", [](float a, float b) { return a * b; }),
             DEFINE_BINARY_OP("/", [](float a, float b) { 
-                if (b == 0) throw ExprError("Division by zero");
+                [[unlikely]] if (b == 0) throw ExprError("Division by zero");
                 return a / b; 
             }),
 
             // 数学函数
             DEFINE_UNARY_OP("exp", [](float a) {
-                if (a > 88) throw ExprError("exp overflow");
+                [[unlikely]] if (a > 88) throw ExprError("exp overflow");
                 return std::exp(a);
             }),
             DEFINE_UNARY_OP("log", [](float a) {
-                if (a <= 0) throw ExprError("log domain error");
+                [[unlikely]] if (a <= 0) throw ExprError("log domain error");
                 return std::log(a);
             }),
             DEFINE_UNARY_OP("sqrt", [](float a) {
-                if (a < 0) throw ExprError("sqrt domain error");
+                [[unlikely]] if (a < 0) throw ExprError("sqrt domain error");
                 return std::sqrt(a);
             }),
             DEFINE_UNARY_OP("sin", std::sin),
@@ -79,9 +79,9 @@ private:
             DEFINE_BINARY_OP("max", std::max),
             DEFINE_BINARY_OP("min", std::min),
             DEFINE_BINARY_OP("pow", [](float a, float b) { 
-                if (a < 0) throw ExprError("pow domain error");
+                [[unlikely]] if (a < 0) throw ExprError("pow domain error");
                 float result = std::pow(a, b);
-                if (result > 3e38f || result < 1e-38f) 
+                [[unlikely]] if (result > 3e38f || result < 1e-38f) 
                     throw ExprError("pow range error");
                 return result;
             }),
@@ -137,7 +137,7 @@ private:
     std::stack<float> stack;
     
     float pop() {
-        if (stack.empty()) throw ExprError("Stack underflow");
+        [[unlikely]] if (stack.empty()) throw ExprError("Stack underflow");
         float val = stack.top();
         stack.pop();
         return val;
@@ -148,7 +148,7 @@ public:
     
     // 收集操作数
     std::vector<float> collectArgs(size_t n) {
-        if (stack.size() < n) {
+        [[unlikely]] if (stack.size() < n) {
             throw ExprError("Stack underflow: need " + std::to_string(n) + " values");
         }
         std::vector<float> args(n);
@@ -166,7 +166,7 @@ public:
     }
 
     float getResult() const {
-        if (stack.size() != 1) {
+        [[unlikely]] if (stack.size() != 1) {
             throw ExprError("Invalid expression evaluation: stack size = " + 
                             std::to_string(stack.size()));
         }
@@ -219,7 +219,7 @@ private:
         for (size_t i = 0; i < tokens.size(); ++i) {
             const auto& token = tokens[i];
             
-            if (isNumber(token) || isVariable(token)) {
+            [[likely]] if (isNumber(token) || isVariable(token)) {
                 stackSize++;
             }
             else if (auto op = registry.getOperator(token)) {
@@ -236,12 +236,12 @@ private:
             }
             
             maxStackSize = std::max(maxStackSize, stackSize);
-            if (maxStackSize > MAX_STACK_SIZE) {
+            [[unlikely]] if (maxStackSize > MAX_STACK_SIZE) {
                 throw ExprError("Stack size limit exceeded");
             }
         }
         
-        if (stackSize != 1) {
+        [[unlikely]] if (stackSize != 1) {
             throw ExprError("Invalid expression: should leave exactly one value on stack, " + 
                             std::to_string(stackSize) + " values found");
         }
@@ -267,20 +267,20 @@ public:
         for (size_t i = 0; i < tokens.size(); ++i) {
             const auto& token = tokens[i];
             if (token == "x") {
-                if (numClips < 1) throw ExprError(
+                [[unlikely]] if (numClips < 1) throw ExprError(
                     "Variable 'x' used but no clips provided");
             }
             else if (token == "y") {
-                if (numClips < 2) throw ExprError(
+                [[unlikely]] if (numClips < 2) throw ExprError(
                     "Variable 'y' used but only " + std::to_string(numClips) + " clip(s) provided");
             }
             else if (token == "z") {
-                if (numClips < 3) throw ExprError(
+                [[unlikely]] if (numClips < 3) throw ExprError(
                     "Variable 'z' used but only " + std::to_string(numClips) + " clip(s) provided");
             }
             else if (token.length() == 1 && token[0] >= 'a' && token[0] <= 'w') {
                 int required = token[0] - 'a' + 4;
-                if (numClips < required) throw ExprError(
+                [[unlikely]] if (numClips < required) throw ExprError(
                     "Variable '" + token + "' used but only " + 
                     std::to_string(numClips) + " clip(s) provided");
             }
@@ -357,7 +357,7 @@ private:
     }
 
     float evaluatePixel(const std::vector<ExecutableToken>& compiled, 
-                       const std::vector<float>& values) const {
+                        const std::vector<float>& values) const {
         ExprStack stack;
 
         for (const auto& token : compiled) {
@@ -591,7 +591,7 @@ static void VS_CC exprCreate(const VSMap* in, VSMap* out, void* userData, VSCore
 
         // 获取输入clips
         d->numNodes = vsapi->propNumElements(in, "clips");
-        if (d->numNodes < 1 || d->numNodes > 26) {
+        [[unlikely]] if (d->numNodes < 1 || d->numNodes > 26) {
             throw ExprError("Must specify between 1 and 26 input clips");
         }
 
@@ -602,14 +602,14 @@ static void VS_CC exprCreate(const VSMap* in, VSMap* out, void* userData, VSCore
             
             if (i == 0) {
                 d->vi = vsapi->getVideoInfo(d->nodes[0]);
-            } else if (!checkVideoFormats(d->vi, vi)) {
+            } else if (!checkVideoFormats(d->vi, vi)) { [[unlikely]]
                 throw ExprError("All inputs must have the same format and dimensions");
             }
         }
 
         // 获取表达式
         int num_expr = vsapi->propNumElements(in, "expr");
-        if (num_expr < 1) {
+        [[unlikely]] if (num_expr < 1) {
             throw ExprError("At least one expression must be specified");
         }
 
