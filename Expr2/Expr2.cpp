@@ -11,6 +11,7 @@
 #include <sstream>
 #include <memory>
 #include <algorithm>
+#include <iostream>
 
 #include "OpsHelper.hpp"
 
@@ -108,11 +109,11 @@ private:
             }
         };
 
-        // 生成 dup1 到 dup25
-        DupOpsRange<1, 25>::apply(staticOperators);
-
-        // 生成 swap1 到 swap25
-        SwapOpsRange<1, 25>::apply(staticOperators);
+        // 在编译期生成 dup1 到 dup25
+        DupOpGenerator::generateOps(staticOperators, make_index_sequence<25>{});
+        
+        // 在编译期生成 swap1 到 swap25
+        SwapOpGenerator::generateOps(staticOperators, make_index_sequence<25>{});
 
         return staticOperators;
     }
@@ -327,7 +328,6 @@ private:
         return tokens;
     }
 
-    // 预编译表达式
     std::vector<ExecutableToken> compileExpression(const std::string& expr) const {
         std::vector<ExecutableToken> result;
         auto tokens = tokenize(expr);
@@ -356,55 +356,44 @@ private:
         return result;
     }
 
-    // 使用预编译的表达式计算像素值
     float evaluatePixel(const std::vector<ExecutableToken>& compiled, 
                        const std::vector<float>& values) const {
-        std::vector<float> stack;
-        stack.reserve(32);
+        ExprStack stack;
 
         for (const auto& token : compiled) {
             try {
                 switch (token.type) {
                     case ExecutableToken::Type::Operator: {
                         const auto& op = token.op;
-                        if (stack.size() < op->minArgs) {
-                            throw ExprError("Stack underflow");
-                        }
-
-                        std::vector<float> args(stack.end() - op->minArgs, stack.end());
-                        stack.erase(stack.end() - op->minArgs, stack.end());
+                        auto args = stack.collectArgs(op->minArgs);
 
                         if (op->resultType == OpResultType::Scalar) {
                             auto f = std::get<std::function<float(const std::vector<float>&)>>(op->func);
-                            stack.push_back(f(args));
+                            stack.push(f(args));
                         } else {
                             auto f = std::get<std::function<std::vector<float>(const std::vector<float>&)>>(op->func);
                             auto results = f(args);
-                            stack.insert(stack.end(), results.begin(), results.end());
+                            stack.applyResults(results);
                         }
                         break;
                     }
                     case ExecutableToken::Type::Variable: {
                         int index = token.varIndex;
-                        stack.push_back(values.size() > index ? values[index] : 0.0f);
+                        stack.push(values.size() > index ? values[index] : 0.0f);
                         break;
                     }
                     case ExecutableToken::Type::Constant: {
-                        stack.push_back(token.constant);
+                        stack.push(token.constant);
                         break;
                     }
                 }
             }
             catch (const std::exception& e) {
-                throw ExprError(std::string("Evaluation error: ") + e.what());
+                throw ExprError(std::string("Evaluation error: ") + e.what() + ". " + stack.debugStack());
             }
         }
 
-        if (stack.size() != 1) {
-            throw ExprError("Invalid expression evaluation: stack size = " + 
-                          std::to_string(stack.size()));
-        }
-        return stack.back();
+        return stack.getResult();
     }
 
 public:
@@ -430,13 +419,11 @@ public:
         bool isChroma = (plane == 1 || plane == 2) && 
                        (fi->colorFamily == cmYUV || fi->colorFamily == cmYCoCg);
 
-        // 预编译表达式
         auto compiled = compileExpression(expr);
         std::vector<float> pixel_values(srcps.size());
 
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
-                // 收集所有输入clip在当前位置的像素值
                 for (size_t i = 0; i < srcps.size(); i++) {
                     float value;
                     if (isFloat) {
@@ -455,10 +442,8 @@ public:
                     pixel_values[i] = value;
                 }
 
-                // 计算表达式
                 float result = evaluatePixel(compiled, pixel_values);
 
-                // 写入结果
                 if (isFloat) {
                     if (isChroma) {
                         result -= 0.5f;
@@ -477,6 +462,7 @@ public:
         }
     }
 };
+
 
 // VapourSynth 插件结构
 struct ExprData {

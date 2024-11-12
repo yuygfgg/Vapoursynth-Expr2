@@ -59,53 +59,67 @@ struct OperatorPattern {
 #define DEFINE_TERNARY_OP(name, impl) \
     {name, {3, 3, -2, OpResultType::Scalar, \
         [](const std::vector<float>& args) -> float { return impl(args[0], args[1], args[2]); }}}
+// 编译期整数序列生成
+template<std::size_t... Is>
+struct index_sequence {};
 
-#define DEFINE_SWAP_OP(start) \
-    {"swap" #start, {(start + 1), (start + 1), 0, OpResultType::Vector, \
-        [start](const std::vector<float>& args) -> std::vector<float> { \
-            std::vector<float> results = args; \
-            std::swap(results[0], results[start]); \
-            return results; \
-        }}}
+template<std::size_t N, std::size_t... Is>
+struct make_index_sequence_impl : make_index_sequence_impl<N-1, N-1, Is...> {};
 
-#define DEFINE_DUP_OP(start) \
-    {"dup" #start, {(start + 1), (start + 1), 1, OpResultType::Vector, \
-        [start](const std::vector<float>& args) -> std::vector<float> { \
-            std::vector<float> results = args; \
-            results.push_back(args[args.size() - start - 1]); \
-            return results; \
-        }}}
+template<std::size_t... Is>
+struct make_index_sequence_impl<0, Is...> : index_sequence<Is...> {};
 
-// 通用基础模板：用于递归终止，当 start == end 时停止递归
-template<int start, int end, void(*InsertFunc)(int, std::map<std::string, OperatorDescriptor>&)>
-struct OpsRange {
-    static void apply(std::map<std::string, OperatorDescriptor>& opMap) {
-        InsertFunc(start, opMap);  // 使用传入的 InsertFunc 函数进行插入
-        OpsRange<start + 1, end, InsertFunc>::apply(opMap);  // 递归调用，展开下一个索引
+template<std::size_t N>
+using make_index_sequence = make_index_sequence_impl<N>;
+
+// 操作符生成器基类
+template<typename Derived>
+struct OpGeneratorBase {
+    template<size_t I>
+    static auto makeOp() {
+        return Derived::template generate<I>();
+    }
+
+    template<typename Map, size_t... Is>
+    static void generateOps(Map& map, index_sequence<Is...>) {
+        (map.insert(makeOp<Is>()), ...);
     }
 };
 
-// 通用特化模板：用于递归终止
-template<int end, void(*InsertFunc)(int, std::map<std::string, OperatorDescriptor>&)>
-struct OpsRange<end, end, InsertFunc> {
-    static void apply(std::map<std::string, OperatorDescriptor>& opMap) {
-        InsertFunc(end, opMap);  // 最后一次展开并插入
+// Dup操作符生成器
+struct DupOpGenerator : OpGeneratorBase<DupOpGenerator> {
+    template<size_t I>
+    static auto generate() {
+        return std::make_pair(
+            std::string("dup") + std::to_string(I),
+            OperatorDescriptor{
+                static_cast<int>(I + 1), static_cast<int>(I + 1), 1,
+                OpResultType::Vector,
+                [](const std::vector<float>& args) -> std::vector<float> {
+                    std::vector<float> results = args;
+                    results.push_back(args[args.size() - I - 1]);
+                    return results;
+                }
+            }
+        );
     }
 };
 
-// Swap 操作符插入函数
-void insertSwapOp(int start, std::map<std::string, OperatorDescriptor>& opMap) {
-    opMap.insert(DEFINE_SWAP_OP(start));  // 插入 swap 操作符
-}
-
-// Dup 操作符插入函数
-void insertDupOp(int start, std::map<std::string, OperatorDescriptor>& opMap) {
-    opMap.insert(DEFINE_DUP_OP(start));  // 插入 dup 操作符
-}
-
-// 使用 OpsRange 模板来定义 SwapOpsRange 和 DupOpsRange
-template<int start, int end>
-using SwapOpsRange = OpsRange<start, end, insertSwapOp>;
-
-template<int start, int end>
-using DupOpsRange = OpsRange<start, end, insertDupOp>;
+// Swap操作符生成器
+struct SwapOpGenerator : OpGeneratorBase<SwapOpGenerator> {
+    template<size_t I>
+    static auto generate() {
+        return std::make_pair(
+            std::string("swap") + std::to_string(I),
+            OperatorDescriptor{
+                static_cast<int>(I + 1), static_cast<int>(I + 1), 0,
+                OpResultType::Vector,
+                [](const std::vector<float>& args) -> std::vector<float> {
+                    std::vector<float> results = args;
+                    std::swap(results[0], results[I]);
+                    return results;
+                }
+            }
+        );
+    }
+};
