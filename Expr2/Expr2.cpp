@@ -12,6 +12,8 @@
 #include <memory>
 #include <algorithm>
 
+const int MAX_STACK_SIZE = 4096; // 4096 should be long enough
+
 // 异常类
 class ExprError : public std::exception {
 private:
@@ -313,7 +315,7 @@ private:
             }
             
             maxStackSize = std::max(maxStackSize, stackSize);
-            if (maxStackSize > 100) {
+            if (maxStackSize > MAX_STACK_SIZE) {
                 throw ExprError("Stack size limit exceeded");
             }
         }
@@ -678,7 +680,7 @@ static void VS_CC exprCreate(const VSMap* in, VSMap* out, void* userData, VSCore
 }
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin* plugin) {
-    configFunc("com.example.expr2", "expr",
+    configFunc("com.yuygfgg.expr2", "expr",
         "VapourSynth Expression Evaluation Plugin",
         VAPOURSYNTH_API_VERSION, 1, plugin);
 
