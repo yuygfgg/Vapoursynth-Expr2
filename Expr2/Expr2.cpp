@@ -36,7 +36,6 @@ struct OperatorDescriptor {
         std::function<std::vector<float>(const std::vector<float>&)>
     > func;
     
-    // 修改工厂函数
     static OperatorDescriptor createUnary(std::function<float(float)> f) {
         return {
             1, 1, 0, 
@@ -74,164 +73,158 @@ struct OperatorPattern {
     std::function<OperatorDescriptor(const std::string&)> generator;
 };
 
-// 操作符注册表
 class OperatorRegistry {
 private:
-    mutable std::map<std::string, OperatorDescriptor> operators;
-    std::vector<OperatorPattern> patterns;
+    static const std::map<std::string, OperatorDescriptor>& getStaticOperators() {
+        static const std::map<std::string, OperatorDescriptor> staticOperators = {
+            // 基本算术运算符
+            {"+", OperatorDescriptor::createBinary([](float a, float b) { return a + b; })},
+            {"-", OperatorDescriptor::createBinary([](float a, float b) { return a - b; })},
+            {"*", OperatorDescriptor::createBinary([](float a, float b) { return a * b; })},
+            {"/", OperatorDescriptor::createBinary([](float a, float b) { 
+                if (b == 0) throw ExprError("Division by zero");
+                return a / b; 
+            })},
 
-    // 辅助函数：创建简单的字符串匹配模式
-    static OperatorPattern createSimplePattern(
-        const std::string& token, 
-        const OperatorDescriptor& desc) 
-    {
-        return {
-            token,
-            [token](const std::string& t) { return t == token; },
-            [desc](const std::string&) { return desc; }
+            // 数学函数
+            {"exp", OperatorDescriptor::createUnary([](float a) {
+                if (a > 88) throw ExprError("exp overflow");
+                return std::exp(a);
+            })},
+            {"log", OperatorDescriptor::createUnary([](float a) {
+                if (a <= 0) throw ExprError("log domain error");
+                return std::log(a);
+            })},
+            {"sqrt", OperatorDescriptor::createUnary([](float a) {
+                if (a < 0) throw ExprError("sqrt domain error");
+                return std::sqrt(a);
+            })},
+            {"sin", OperatorDescriptor::createUnary([](float a) { return std::sin(a); })},
+            {"cos", OperatorDescriptor::createUnary([](float a) { return std::cos(a); })},
+            {"abs", OperatorDescriptor::createUnary([](float a) { return std::abs(a); })},
+            {"not", OperatorDescriptor::createUnary([](float a) { return a > 0 ? 0.0f : 1.0f; })},
+
+            // 比较运算符
+            {">", OperatorDescriptor::createBinary([](float a, float b) { return a > b ? 1.0f : 0.0f; })},
+            {"<", OperatorDescriptor::createBinary([](float a, float b) { return a < b ? 1.0f : 0.0f; })},
+            {"=", OperatorDescriptor::createBinary([](float a, float b) { return a == b ? 1.0f : 0.0f; })},
+            {">=", OperatorDescriptor::createBinary([](float a, float b) { return a >= b ? 1.0f : 0.0f; })},
+            {"<=", OperatorDescriptor::createBinary([](float a, float b) { return a <= b ? 1.0f : 0.0f; })},
+
+            // 逻辑运算符
+            {"and", OperatorDescriptor::createBinary([](float a, float b) { 
+                return (a > 0 && b > 0) ? 1.0f : 0.0f; 
+            })},
+            {"or", OperatorDescriptor::createBinary([](float a, float b) { 
+                return (a > 0 || b > 0) ? 1.0f : 0.0f; 
+            })},
+            {"xor", OperatorDescriptor::createBinary([](float a, float b) { 
+                return ((a > 0) != (b > 0)) ? 1.0f : 0.0f; 
+            })},
+
+            // 其他数学运算符
+            {"max", OperatorDescriptor::createBinary([](float a, float b) { return std::max(a, b); })},
+            {"min", OperatorDescriptor::createBinary([](float a, float b) { return std::min(a, b); })},
+            {"pow", OperatorDescriptor::createBinary([](float a, float b) { 
+                if (a < 0) throw ExprError("pow domain error");
+                float result = std::pow(a, b);
+                if (result > 3e38f || result < 1e-38f) 
+                    throw ExprError("pow range error");
+                return result;
+            })},
+
+            // 三元运算符
+            {"?", OperatorDescriptor::createTernary([](float c, float t, float f) { 
+                return c > 0 ? t : f; 
+            })}
         };
+        return staticOperators;
     }
+
+    static const std::vector<OperatorPattern>& getStaticPatterns() {
+        static const std::vector<OperatorPattern> staticPatterns = {
+            // dup pattern
+            {
+                "dup",
+                [](const std::string& token) {
+                    if (token == "dup") return true;
+                    if (!token.starts_with("dup")) return false;
+                    try {
+                        int n = std::stoi(token.substr(3));
+                        return n >= 0 && n <= 25;
+                    } catch (...) {
+                        return false;
+                    }
+                },
+                [](const std::string& token) {
+                    int n = token == "dup" ? 0 : std::stoi(token.substr(3));
+                    return OperatorDescriptor::createStackOp(
+                        n + 1, n + 1, 1,
+                        [n](const std::vector<float>& args) {
+                            std::vector<float> results = args;
+                            results.push_back(args[args.size() - n - 1]);
+                            return results;
+                        }
+                    );
+                }
+            },
+            // swap pattern
+            {
+                "swap",
+                [](const std::string& token) {
+                    if (token == "swap") return true;
+                    if (!token.starts_with("swap")) return false;
+                    try {
+                        int n = std::stoi(token.substr(4));
+                        return n >= 1 && n <= 25;
+                    } catch (...) {
+                        return false;
+                    }
+                },
+                [](const std::string& token) {
+                    int n = token == "swap" ? 1 : std::stoi(token.substr(4));
+                    return OperatorDescriptor::createStackOp(
+                        n + 1, n + 1, 0,
+                        [n](const std::vector<float>& args) {
+                            std::vector<float> results = args;
+                            std::swap(results[0], results[n]);
+                            return results;
+                        }
+                    );
+                }
+            }
+        };
+        return staticPatterns;
+    }
+
+    mutable std::map<std::string, OperatorDescriptor> dynamicOperators;
 
 public:
-    void registerPattern(const OperatorPattern& pattern) {
-        patterns.push_back(pattern);
-    }
-
-    void registerOperator(const std::string& token, const OperatorDescriptor& desc) {
-        registerPattern(createSimplePattern(token, desc));
-    }
-
     const OperatorDescriptor* getOperator(const std::string& token) const {
-        // 先查找固定操作符
-        auto it = operators.find(token);
-        if (it != operators.end()) {
-            return &it->second;
+        // 先查找静态操作符
+        const auto& staticOps = getStaticOperators();
+        auto staticIt = staticOps.find(token);
+        if (staticIt != staticOps.end()) {
+            return &staticIt->second;
         }
 
-        // 再匹配模式
+        // 查找动态缓存
+        auto dynamicIt = dynamicOperators.find(token);
+        if (dynamicIt != dynamicOperators.end()) {
+            return &dynamicIt->second;
+        }
+
+        // 匹配模式
+        const auto& patterns = getStaticPatterns();
         for (const auto& pattern : patterns) {
             if (token.starts_with(pattern.prefix) && pattern.matcher(token)) {
-                operators[token] = pattern.generator(token);  // 缓存生成的操作符
-                return &operators[token];
+                auto& inserted = dynamicOperators[token] = pattern.generator(token);
+                return &inserted;
             }
         }
         return nullptr;
     }
 
-    void initDefaultOperators() {
-        // 基本算术运算符
-        registerOperator("+", OperatorDescriptor::createBinary([](float a, float b) { return a + b; }));
-        registerOperator("-", OperatorDescriptor::createBinary([](float a, float b) { return a - b; }));
-        registerOperator("*", OperatorDescriptor::createBinary([](float a, float b) { return a * b; }));
-        registerOperator("/", OperatorDescriptor::createBinary([](float a, float b) { 
-            if (b == 0) throw ExprError("Division by zero");
-            return a / b; 
-        }));
-
-        // 数学函数
-        registerOperator("exp", OperatorDescriptor::createUnary([](float a) {
-            if (a > 88) throw ExprError("exp overflow");
-            return std::exp(a);
-        }));
-        registerOperator("log", OperatorDescriptor::createUnary([](float a) {
-            if (a <= 0) throw ExprError("log domain error");
-            return std::log(a);
-        }));
-        registerOperator("sqrt", OperatorDescriptor::createUnary([](float a) {
-            if (a < 0) throw ExprError("sqrt domain error");
-            return std::sqrt(a);
-        }));
-        registerOperator("sin", OperatorDescriptor::createUnary([](float a) { return std::sin(a); }));
-        registerOperator("cos", OperatorDescriptor::createUnary([](float a) { return std::cos(a); }));
-        registerOperator("abs", OperatorDescriptor::createUnary([](float a) { return std::abs(a); }));
-        registerOperator("not", OperatorDescriptor::createUnary([](float a) { return a > 0 ? 0.0f : 1.0f; }));
-
-        // 比较运算符
-        registerOperator(">", OperatorDescriptor::createBinary([](float a, float b) { return a > b ? 1.0f : 0.0f; }));
-        registerOperator("<", OperatorDescriptor::createBinary([](float a, float b) { return a < b ? 1.0f : 0.0f; }));
-        registerOperator("=", OperatorDescriptor::createBinary([](float a, float b) { return a == b ? 1.0f : 0.0f; }));
-        registerOperator(">=", OperatorDescriptor::createBinary([](float a, float b) { return a >= b ? 1.0f : 0.0f; }));
-        registerOperator("<=", OperatorDescriptor::createBinary([](float a, float b) { return a <= b ? 1.0f : 0.0f; }));
-
-        // 逻辑运算符
-        registerOperator("and", OperatorDescriptor::createBinary([](float a, float b) { 
-            return (a > 0 && b > 0) ? 1.0f : 0.0f; 
-        }));
-        registerOperator("or", OperatorDescriptor::createBinary([](float a, float b) { 
-            return (a > 0 || b > 0) ? 1.0f : 0.0f; 
-        }));
-        registerOperator("xor", OperatorDescriptor::createBinary([](float a, float b) { 
-            return ((a > 0) != (b > 0)) ? 1.0f : 0.0f; 
-        }));
-
-        // 其他数学运算符
-        registerOperator("max", OperatorDescriptor::createBinary([](float a, float b) { return std::max(a, b); }));
-        registerOperator("min", OperatorDescriptor::createBinary([](float a, float b) { return std::min(a, b); }));
-        registerOperator("pow", OperatorDescriptor::createBinary([](float a, float b) { 
-            if (a < 0) throw ExprError("pow domain error");
-            float result = std::pow(a, b);
-            if (result > 3e38f || result < 1e-38f) 
-                throw ExprError("pow range error");
-            return result;
-        }));
-
-        // 三元运算符
-        registerOperator("?", OperatorDescriptor::createTernary([](float c, float t, float f) { 
-            return c > 0 ? t : f; 
-        }));
-
-        // 特殊模式：dupN
-        registerPattern({
-            "dup",
-            [](const std::string& token) {
-                if (token == "dup") return true;
-                if (!token.starts_with("dup")) return false;
-                try {
-                    int n = std::stoi(token.substr(3));
-                    return n >= 0 && n <= 25;
-                } catch (...) {
-                    return false;
-                }
-            },
-            [](const std::string& token) {
-                int n = token == "dup" ? 0 : std::stoi(token.substr(3));
-                return OperatorDescriptor::createStackOp(
-                    n + 1, n + 1, 1,
-                    [n](const std::vector<float>& args) {
-                        std::vector<float> results = args;
-                        results.push_back(args[args.size() - n - 1]);
-                        return results;
-                    }
-                );
-            }
-        });
-
-        // 特殊模式：swapN
-        registerPattern({
-            "swap",
-            [](const std::string& token) {
-                if (token == "swap") return true;
-                if (!token.starts_with("swap")) return false;
-                try {
-                    int n = std::stoi(token.substr(4));
-                    return n >= 1 && n <= 25;
-                } catch (...) {
-                    return false;
-                }
-            },
-            [](const std::string& token) {
-                int n = token == "swap" ? 1 : std::stoi(token.substr(4));
-                return OperatorDescriptor::createStackOp(
-                    n + 1, n + 1, 0,
-                    [n](const std::vector<float>& args) {
-                        std::vector<float> results = args;
-                        std::swap(results[0], results[n]);
-                        return results;
-                    }
-                );
-            }
-        });
-    }
 };
 
 // 栈操作类
@@ -512,9 +505,7 @@ private:
     }
 
 public:
-    ExprCalculator() : validator(registry) {
-        registry.initDefaultOperators();
-    }
+    ExprCalculator() : validator(registry) {}
 
     void validate(const std::string& expr, int numClips) const {
         validator.validate(expr, numClips);
@@ -541,7 +532,7 @@ public:
         std::vector<float> pixel_values(srcps.size());
 
         // 使用OpenMP进行并行处理
-        #pragma omp parallel for collapse(2)
+        #pragma omp simd
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 // 收集所有输入clip在当前位置的像素值
