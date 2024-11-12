@@ -1,5 +1,5 @@
-#include </usr/local/include/vapoursynth/VapourSynth.h>
-#include </usr/local/include/vapoursynth/VSHelper.h>
+#include <vapoursynth/VapourSynth.h>
+#include <vapoursynth/VSHelper.h>
 #include <stack>
 #include <map>
 #include <set>
