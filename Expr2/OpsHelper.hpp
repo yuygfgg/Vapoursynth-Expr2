@@ -10,36 +10,6 @@ struct OperatorDescriptor {
         std::function<float(const std::vector<float>&)>,
         std::function<std::vector<float>(const std::vector<float>&)>
     > func;
-    
-    static OperatorDescriptor createUnary(std::function<float(float)> f) {
-        return {
-            1, 1, 0, 
-            OpResultType::Scalar,
-            [f](const std::vector<float>& args) { return f(args[0]); }
-        };
-    }
-    
-    static OperatorDescriptor createBinary(std::function<float(float,float)> f) {
-        return {
-            2, 2, -1, 
-            OpResultType::Scalar,
-            [f](const std::vector<float>& args) { return f(args[0], args[1]); }
-        };
-    }
-    
-    static OperatorDescriptor createTernary(std::function<float(float,float,float)> f) {
-        return {
-            3, 3, -2, 
-            OpResultType::Scalar,
-            [f](const std::vector<float>& args) { return f(args[0], args[1], args[2]); }
-        };
-    }
-    
-    static OperatorDescriptor createStackOp(int minA, int maxA, int delta, 
-        std::function<std::vector<float>(const std::vector<float>&)> f) 
-    {
-        return {minA, maxA, delta, OpResultType::Vector, f};
-    }
 };
 
 struct OperatorPattern {
