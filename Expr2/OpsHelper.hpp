@@ -59,6 +59,7 @@ struct OperatorPattern {
 #define DEFINE_TERNARY_OP(name, impl) \
     {name, {3, 3, -2, OpResultType::Scalar, \
         [](const std::vector<float>& args) -> float { return impl(args[0], args[1], args[2]); }}}
+
 // 编译期整数序列生成
 template<std::size_t... Is>
 struct index_sequence {};

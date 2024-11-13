@@ -28,14 +28,9 @@ public:
 
 class OperatorRegistry {
 private:
-    struct DynamicPattern {
-        std::string prefix;
-        std::function<bool(const std::string&)> matcher;
-        std::function<OperatorDescriptor(const std::string&)> generator;
-    };
 
-    static std::map<std::string, OperatorDescriptor>& getStaticOperators() {
-        static std::map<std::string, OperatorDescriptor> staticOperators = {
+    static std::map<std::string_view, OperatorDescriptor>& getStaticOperators() {
+        static std::map<std::string_view, OperatorDescriptor> staticOperators = {
             // 基本算术运算符
             DEFINE_BINARY_OP("+", [](float a, float b) { return a + b; }),
             DEFINE_BINARY_OP("-", [](float a, float b) { return a - b; }),
@@ -117,8 +112,6 @@ private:
 
         return staticOperators;
     }
-
-    mutable std::map<std::string, OperatorDescriptor> dynamicOperators;
 
 public:
     const OperatorDescriptor* getOperator(const std::string& token) const {
@@ -404,20 +397,20 @@ public:
     }
 
     void processPlane(const std::string& expr,
-                     const std::vector<const uint8_t*>& srcps,
-                     const std::vector<int>& src_strides,
-                     uint8_t* dstp,
-                     int dst_stride,
-                     int width,
-                     int height,
-                     int plane,
-                     const VSFormat* fi) const 
+                    const std::vector<const uint8_t*>& srcps,
+                    const std::vector<int>& src_strides,
+                    uint8_t* dstp,
+                    int dst_stride,
+                    int width,
+                    int height,
+                    int plane,
+                    const VSFormat* fi) const 
     {
         bool isFloat = fi->sampleType == stFloat;
         int bits = fi->bitsPerSample;
         int maxValue = isFloat ? 1 : ((1 << bits) - 1);
         bool isChroma = (plane == 1 || plane == 2) && 
-                       (fi->colorFamily == cmYUV || fi->colorFamily == cmYCoCg);
+                        (fi->colorFamily == cmYUV || fi->colorFamily == cmYCoCg);
 
         auto compiled = compileExpression(expr);
         std::vector<float> pixel_values(srcps.size());
