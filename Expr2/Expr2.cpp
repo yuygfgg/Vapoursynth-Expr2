@@ -29,8 +29,8 @@ public:
 class OperatorRegistry {
 private:
 
-    static std::map<std::string_view, OperatorDescriptor>& getStaticOperators() {
-        static std::map<std::string_view, OperatorDescriptor> staticOperators = {
+    static std::map<std::string, OperatorDescriptor>& getStaticOperators() {
+        static std::map<std::string, OperatorDescriptor> staticOperators = {
             // 基本算术运算符
             DEFINE_BINARY_OP("+", [](float a, float b) { return a + b; }),
             DEFINE_BINARY_OP("-", [](float a, float b) { return a - b; }),
